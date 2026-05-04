@@ -6,7 +6,9 @@ export type NewsArticle = {
   source: string;
   time: string;
   image: string;
-  category: 'national' | 'international' | 'sports' | 'tech' | 'entertainment';
+  category: 'national' | 'international' | 'sports' | 'tech' | 'entertainment' | 'visa' | 'bangla' | 'english' | string;
+  url: string;
+  timestamp?: number;
 };
 
 export type MediaSource = {
@@ -26,7 +28,8 @@ export const topNews: NewsArticle[] = [
     source: 'প্রথম আলো',
     time: '২ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1561553590-267fc716698a?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'national'
+    category: 'national',
+    url: 'https://www.prothomalo.com'
   },
   {
     id: 'n2',
@@ -36,7 +39,8 @@ export const topNews: NewsArticle[] = [
     source: 'কালের কণ্ঠ',
     time: '৪ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1503676260728-1c00da094a0b?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'national'
+    category: 'national',
+    url: 'https://www.kalerkantho.com'
   },
   {
     id: 'n3',
@@ -46,47 +50,74 @@ export const topNews: NewsArticle[] = [
     source: 'দ্য ডেইলি স্টার',
     time: '৫ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1566118498563-3f1b3dc9beff?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'national'
+    category: 'national',
+    url: 'https://www.thedailystar.net'
   },
   {
     id: 'i1',
     title: 'কৃত্রিম বুদ্ধিমত্তায় বড় পরিবর্তন আনছে শীর্ষ টেক জায়ান্টগুলো',
-    summary: 'নতুন জেনারেটিভ এআই মডেল উন্মুক্ত করতে যাচ্ছে সিলিকন ভ্যালি। প্রযুক্তির ইতিহাসে এটি একটি বড় মাইলফলক হতে পারে।',
-    content: 'গুগল এবং অন্যান্য শীর্ষ প্রযুক্তি প্রতিষ্ঠানগুলো তাদের এআই চ্যাটবট ও টুলগুলোকে আরও বুদ্ধিমান এবং ইউজ-ফ্রেন্ডলি করার জন্য বিশাল অঙ্কের বিনিয়োগ করছে। বিশেষজ্ঞরা বলছেন, এর ফলে অনেক খাতের কাজের ধরন বদলে যাবে।',
+    summary: 'শীর্ষ টেক জায়ান্টগুলো তাদের পণ্যে জেনারেটিভ এআই যুক্ত করে নতুন যুগের সূচনা করছে।',
+    content: 'গুগল, মাইক্রোসফট এবং অ্যাপল তাদের অপারেটিং সিস্টেমে এআই ফিচার যুক্ত করার পরিকল্পনা প্রকাশ করেছে। এর ফলে ব্যবহারকারীরা আরও স্মার্ট ভাবে তাদের ডিভাইস ব্যবহার করতে পারবেন।',
     source: 'বিবিসি বাংলা',
     time: '৩ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1677442136019-21780ecad995?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'international'
+    category: 'international',
+    url: 'https://www.bbc.com/bengali'
   },
   {
     id: 'i2',
-    title: 'মহাকাশ গবেষণায় নতুন মাত্রা: মঙ্গলের পথে নতুন রোভার',
-    summary: 'মঙ্গলে প্রাণের অস্তিত্ব খুঁজতে নতুন একটি রোভার পাঠিয়েছে আন্তর্জাতিক গবেষক দল।',
-    content: 'রোভারটি আগামী সাত মাসের মধ্যে মঙ্গলের মাটি স্পর্শ করবে বলে আশা করা হচ্ছে। এর প্রধান কাজ হবে মাটির নমুনা সংগ্রহ করা এবং প্রাচীন প্রাণের সন্ধান করা।',
+    title: 'বৈশ্বিক অর্থনীতিতে মন্দার প্রভাব, মুদ্রাস্ফীতি নিয়ন্ত্রণে হিমশিম খাচ্ছে দেশগুলো',
+    summary: 'যুদ্ধ ও সরবরাহ ব্যবস্থার সংকটের কারণে বিশ্বব্যাপী নিত্যপণ্যের দাম আকাশছোঁয়া।',
+    content: 'আন্তর্জাতিক মুদ্রা তহবিল (আইএমএফ) সতর্ক করেছে যে, অনেক উন্নত দেশও মন্দার কবলে পড়তে পারে। মুদ্রাস্ফীতি কমাতে ব্যাংকগুলো সুদের হার বৃদ্ধি করছে।',
     source: 'রয়টার্স',
     time: '৬ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1614728894747-a83421e2b9c9?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'international'
-  },
-  {
-    id: 'i3',
-    title: 'বিশ্ব বাণিজ্যে নতুন মেরুকরণ, এশিয়ার অর্থনীতিতে প্রভাব',
-    summary: 'আন্তর্জাতিক বাণিজ্যে বড় ধরনের পরিবর্তন আসছে। এশিয়ার বাজারগুলো এর ফলে লাভবান হতে পারে বলে মনে করছেন অর্থনীতিবিদরা।',
-    content: 'সাপ্লাই চেইন ডাইভারসিফিকেশনের কারণে অনেক বিনিয়োগকারী এখন নতুন বাজারের দিকে ঝুঁকছেন। এশিয়া প্যাসিফিক অঞ্চল এই বিনিয়োগের অন্যতম প্রধান গন্তব্য হয়ে উঠছে।',
-    source: 'আল জাজিরা',
-    time: '৭ ঘণ্টা আগে',
-    image: 'https://images.unsplash.com/photo-1526304640581-d334cdbbf45e?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'international'
+    category: 'international',
+    url: 'https://www.reuters.com'
   },
   {
     id: 's1',
-    title: 'বিশ্বকাপ বাছাইপর্বে আজ মাঠে নামছে বাংলাদেশ',
-    summary: 'গুরুত্বপূর্ণ ম্যাচে শক্তিশালী প্রতিপক্ষের মোকাবিলা করবে বাংলাদেশ দল। দলে ফিরেছেন অভিজ্ঞ অধিনায়ক।',
-    content: 'কোচ জানিয়েছেন, দলের সবাই ফিট আছেন এবং ভালো কিছু করার ব্যাপারে আশাবাদী। আজ সন্ধ্যার ম্যাচে দর্শকদের পূর্ণ সমর্থন প্রত্যাশা করছে দল।',
+    title: 'বিশ্বকাপ ফুটবলের প্রস্তুতি শুরু, নতুন ভেন্যু নিয়ে উচ্ছ্বসিত ফুটবলপ্রেমীরা',
+    summary: 'ফিফা বিশ্বকাপের জন্য চূড়ান্ত ভেন্যু তালিকা প্রকাশ করা হয়েছে। আধুনিক সুবিধাসম্পন্ন স্টেডিয়ামগুলো প্রস্তুত হচ্ছে।',
+    content: 'আগামী বিশ্বকাপের আয়োজক দেশগুলো জানায়, তারা সর্বোচ্চ নিরাপত্তা ও দর্শনার্থীদের সুবিধার কথা বিবেচনা করে প্রস্তুতি নিচ্ছে। ফুটবল তারকাদের নিয়ে এখনই শুরু হয়েছে জল্পনা-কল্পনা।',
     source: 'যুগান্তর',
     time: '১ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'sports'
+    category: 'sports',
+    url: 'https://www.jugantor.com'
+  },
+  {
+    id: 's2',
+    title: 'টি-টোয়েন্টি সিরিজে বাংলাদেশের দাপুটে জয়',
+    summary: 'সিরিজের শেষ ম্যাচে অলরাউন্ড পারফরম্যান্সে সিরিজ নিশ্চিত করল বাংলাদেশ।',
+    content: 'ব্যাটসম্যানদের দুর্দান্ত শুরু এবং বোলারদের নিয়ন্ত্রিত বোলিংয়ে সহজ জয় নিয়ে মাঠ ছাড়ে টাইগাররা। ম্যাচসেরা হয়েছেন তরুণ অলরাউন্ডার।',
+    source: 'প্রথম আলো',
+    time: '৩ ঘণ্টা আগে',
+    image: 'https://images.unsplash.com/photo-1540747913346-19e32dc3e97e?auto=format&fit=crop&q=80&w=800&h=500',
+    category: 'sports',
+    url: 'https://www.prothomalo.com'
+  },
+  {
+    id: 's3',
+    title: 'চ্যাম্পিয়ন্স লিগে রিয়াল মাদ্রিদের অসাধারণ কামব্যাক',
+    summary: 'পিছিয়ে পড়েও শেষ মুহূর্তের জোড়া গোলে জয় নিশ্চিত করল স্প্যানিশ জায়ান্টরা।',
+    content: 'রুদ্ধশ্বাস এই ম্যাচে অসাধারণ ক্রীড়ানৈপুণ্য দেখিয়েছেন দলের ফরোয়ার্ডরা। এই জয়ের ফলে সেমিফাইনালে খেলা প্রায় নিশ্চিত করে ফেলল তারা।',
+    source: 'দ্য ডেইলি স্টার',
+    time: '৬ ঘণ্টা আগে',
+    image: 'https://images.unsplash.com/photo-1579952363873-27f3bade9f55?auto=format&fit=crop&q=80&w=800&h=500',
+    category: 'sports',
+    url: 'https://www.thedailystar.net'
+  },
+  {
+    id: 's4',
+    title: 'আইপিএলে রেকর্ড গড়া ইনিংস খেললেন কোহলি',
+    summary: 'দুর্দান্ত এক সেঞ্চুরিতে দলকে বড় সংগ্রহ এনে দিলেন বিরাট কোহলি।',
+    content: 'শুরু থেকেই আক্রমণাত্মক ব্যাটিং করে প্রতিপক্ষের বোলারদের চাপে ফেলেন এই আইকন ব্যাটার। তার এই ইনিংসে ভর করেই জয় নিশ্চিত করে তার দল।',
+    source: 'イッテファク',
+    time: '৮ ঘণ্টা আগে',
+    image: 'https://images.unsplash.com/photo-1531415074968-03611f095d31?auto=format&fit=crop&q=80&w=800&h=500',
+    category: 'sports',
+    url: 'https://www.ittefaq.com.bd'
   },
   {
     id: 't1',
@@ -96,17 +127,19 @@ export const topNews: NewsArticle[] = [
     source: 'The Daily Star',
     time: '৫ ঘণ্টা আগে',
     image: 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'tech'
+    category: 'tech',
+    url: 'https://www.thedailystar.net'
   },
   {
-    id: 'e1',
-    title: 'অস্কারে সেরা ছবির পুরস্কার জিতল নতুন সিনেমা',
-    summary: 'লস অ্যাঞ্জেলেসে অনুষ্ঠিত একাডেমি অ্যাওয়ার্ডসে সেরা চলচ্চিত্রের পুরস্কার জিতেছে আলোচিত ছবিটি।',
-    content: 'সিনেমাটির পরিচালক এই সম্মাননা তার পুরো টিমকে উৎসর্গ করেছেন। দর্শকরাও ছবিটি নিয়ে দারুণ উচ্ছ্বসিত ছিলেন।',
-    source: 'সমকাল',
-    time: '১০ ঘণ্টা আগে',
-    image: 'https://images.unsplash.com/photo-1485846234645-a62644f84728?auto=format&fit=crop&q=80&w=800&h=500',
-    category: 'entertainment'
+    id: 'v1',
+    title: 'ইউএস ভিসার নতুন নিয়মকানুন',
+    summary: 'মার্কিন যুক্তরাষ্ট্র বাংলাদেশীদের জন্য ভিসা নীতিতে পরিবর্তন এনেছে।',
+    content: 'নতুন ভিসা নীতিতে স্টুডেন্ট এবং ওয়ার্ক ভিসার জন্য কিছু নতুন শর্ত যুক্ত করা হয়েছে। বিস্তারিত জানতে এম্বেসি সাইট ভিজিট করুন।',
+    source: 'প্রথম আলো',
+    time: '১ ঘণ্টা আগে',
+    image: 'https://images.unsplash.com/photo-1555899434-94d1368aa7af?auto=format&fit=crop&q=80&w=800&h=500',
+    category: 'visa',
+    url: 'https://www.prothomalo.com'
   }
 ];
 
@@ -137,4 +170,21 @@ export const tvChannels: MediaSource[] = [
   { id: 't4', name: 'NTV', url: 'https://www.ntvbd.com', logoText: 'NTV', color: 'bg-emerald-600' },
   { id: 't5', name: 'Independent', url: 'https://www.independent24.com', logoText: 'Ind', color: 'bg-violet-700' },
   { id: 't6', name: 'ATN News', url: 'https://www.atnnewstv.com', logoText: 'ATN', color: 'bg-red-700' },
+  { id: 't7', name: 'Ekattor TV', url: 'https://ekattor.tv', logoText: '৭১', color: 'bg-green-600' },
+  { id: 't8', name: 'DBC News', url: 'https://dbcnews.tv', logoText: 'DBC', color: 'bg-blue-600' },
+  { id: 't9', name: 'Channel 24', url: 'https://www.channel24bd.tv', logoText: '২৪', color: 'bg-red-800' },
+  { id: 't10', name: 'News24', url: 'https://www.news24bd.tv', logoText: 'N24', color: 'bg-red-500' },
+  { id: 't11', name: 'Banglavision', url: 'https://bvnews24.com', logoText: 'বিভি', color: 'bg-blue-800' },
+  { id: 't12', name: 'RTV', url: 'https://www.rtvonline.com', logoText: 'RTV', color: 'bg-red-600' },
+];
+
+export const internationalChannels: MediaSource[] = [
+  { id: 'i1', name: 'BBC News', url: 'https://www.bbc.com/news', logoText: 'BBC', color: 'bg-red-800' },
+  { id: 'i2', name: 'CNN', url: 'https://edition.cnn.com', logoText: 'CNN', color: 'bg-red-600' },
+  { id: 'i3', name: 'Al Jazeera', url: 'https://www.aljazeera.com', logoText: 'AJ', color: 'bg-orange-600' },
+  { id: 'i4', name: 'Reuters', url: 'https://www.reuters.com', logoText: 'RTR', color: 'bg-orange-800' },
+  { id: 'i5', name: 'Sky News', url: 'https://news.sky.com', logoText: 'SKY', color: 'bg-blue-800' },
+  { id: 'i6', name: 'Fox News', url: 'https://www.foxnews.com', logoText: 'FOX', color: 'bg-blue-900' },
+  { id: 'i7', name: 'DW News', url: 'https://www.dw.com', logoText: 'DW', color: 'bg-blue-600' },
+  { id: 'i8', name: 'France 24', url: 'https://www.france24.com/en/', logoText: 'F24', color: 'bg-sky-600' },
 ];
