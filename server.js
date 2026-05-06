@@ -21,4 +21,11 @@ const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
   console.log("Running on port", PORT);
+});app.get("/api/news", (req, res) => {
+  res.json([
+    {
+      title: "Test News 1",
+      description: "This is sample news"
+    }
+  ]);
 });
