@@ -1,7 +1,29 @@
-@import url('https://fonts.googleapis.com/css2?family=Noto+Serif+Bengali:wght@400;500;600;700&family=Inter:wght@300;400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Hind+Siliguri:wght@400;500;600;700&family=Inter:wght@400;500;600;700;800&display=swap');
 @import "tailwindcss";
 
 @theme {
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
-  --font-bengali: "Noto Serif Bengali", ui-serif, Georgia, serif;
+  --font-bengali: "Hind Siliguri", sans-serif;
+}
+
+@layer utilities {
+  .hide-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .hide-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-800 dark:bg-gray-800 dark:text-gray-200;
+  }
+}
+
+@layer components {
+  .news-card {
+    @apply bg-white dark:bg-[#121212] rounded-xl p-4 m-2 shadow-[0_2px_10px_rgba(0,0,0,0.1)] transition-transform duration-300;
+  }
+  .news-card:hover {
+    @apply -translate-y-[3px];
+  }
 }

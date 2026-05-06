@@ -1,0 +1,1 @@
+fetch('https://newshub-bd.onrender.com/api/news').then(res => res.json()).then(data => console.log(JSON.stringify(data, null, 2).substring(0, 1500))).catch(err => console.error(err));

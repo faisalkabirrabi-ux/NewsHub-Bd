@@ -1,0 +1,47 @@
+{
+  "entities": {
+    "NewsArticle": {
+      "title": "News Article",
+      "description": "A news article entry",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "excerpt": { "type": "string" },
+        "category": { "type": "string" },
+        "source": { "type": "string" },
+        "url": { "type": "string" },
+        "imageUrl": { "type": "string" },
+        "publishedAt": { "type": "string", "format": "date-time" },
+        "authorId": { "type": "string" },
+        "isBreaking": { "type": "boolean" },
+        "isHeadline": { "type": "boolean" }
+      },
+      "required": ["title", "content", "category", "source", "publishedAt"]
+    },
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "User profile data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "role": { "type": "string", "enum": ["admin", "user"] },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    }
+  },
+  "firestore": {
+    "articles": {
+      "schema": "NewsArticle",
+      "description": "Collection of news articles"
+    },
+    "users": {
+      "schema": "UserProfile",
+      "description": "Collection of user profiles"
+    }
+  }
+}

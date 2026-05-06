@@ -1,67 +1,289 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy } from 'lucide-react';
+import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2 } from 'lucide-react';
 import { topNews, banglaPapers, englishPapers, tvChannels, internationalChannels, NewsArticle, MediaSource } from './data';
-import { AIBot } from './AIBot';
+import { fetchLiveNews } from './services/newsService';
+import NewsRow from './components/NewsRow';
+import { auth, db } from './lib/firebase';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
+import { collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import AdminApp from './admin/AdminApp';
 
-const categoryPrompts: Record<string, string> = {
-  national: "Bangladesh news, politics, Dhaka city, culture, flag of Bangladesh",
-  international: "World news, global events, diplomacy, United Nations",
-  sports: "Stadium, sports action, cricket, football, trophy",
-  tech: "Technology, artificial intelligence, gadgets, software, cyber",
-  entertainment: "Cinema, celebrity, music, red carpet, movie theater",
-  visa: "Immigration, passport, travel documents, airport, world map",
-  bangla: "Bangladesh local news, newspaper, Dhaka life",
-  english: "International business, global news, corporate",
-  default: "News update, newspaper, broadcast studio, modern media"
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  };
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+// Neutral news placeholders to avoid "AI" look
+const categoryKeywords: Record<string, string[]> = {
+  national: ['https://images.unsplash.com/photo-1504711434969-e33886168f5c'],
+  international: ['https://images.unsplash.com/photo-1529107386315-e1a2ed48a620'],
+  sports: ['https://images.unsplash.com/photo-1508098682722-e99c43a406b2'],
+  tech: ['https://images.unsplash.com/photo-1518770660439-4636190af475'],
+  entertainment: ['https://images.unsplash.com/photo-1492684223066-81342ee5ff30'],
+  visa: ['https://images.unsplash.com/photo-1544016768-982d1554f0b9'],
+  default: ['https://images.unsplash.com/photo-1495020689067-958852a7765e']
 };
 
-const getAIImage = (title: string, category: string) => {
-  const baseKeyword = categoryPrompts[category] || categoryPrompts.default;
-  // Improve seed variety using title hash + length to avoid collisions on similar starts
-  const hash = title.split('').reduce((acc, char, i) => acc + (char.charCodeAt(0) * (i + 1)), 0);
-  const seed = Math.abs(hash) % 1000000;
-  
-  // Clean title for URL safety but keep enough context
-  // Remove non-alphanumeric except spaces for better prompt parsing
-  const cleanTitle = title.replace(/[^\w\s\u0980-\u09FF]/gi, ' ').substring(0, 120);
-  
-  // High quality photojournalism prompt
-  const prompt = `Professional news photography, high-quality editorial style, award-winning photojournalism, cinematic lighting, sharp focus, 8k resolution. Subject: ${cleanTitle}. Context: ${baseKeyword}. No text, no captions, highly realistic.`;
-  
-  return `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=1200&height=800&nologo=true&seed=${seed}&model=flux`;
+const getVarietyImage = (title: string, category: string) => {
+  const images = categoryKeywords[category] || categoryKeywords.default;
+  const hash = title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const baseImg = images[hash % images.length];
+  // Adding specific processing params to ensure variety and quality
+  return `${baseImg}?auto=format&fit=crop&q=80&w=1200&h=800&sig=${hash}`;
 };
 
-const fallbackImages = [
-  'https://images.unsplash.com/photo-1546422904-90eab23c3d7e?auto=format&fit=crop&q=80&w=1200&h=800',
-  'https://images.unsplash.com/photo-1504711434969-e33886168f5c?auto=format&fit=crop&q=80&w=1200&h=800',
-  'https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1200&h=800',
-  'https://images.unsplash.com/photo-1585829365295-ab7cd400c167?auto=format&fit=crop&q=80&w=1200&h=800'
-];
+const isValidImageUrl = (url: string | null | undefined): boolean => {
+  if (!url) return false;
+  const lower = url.toLowerCase();
+  
+  if (
+     lower.includes('logo') || 
+     lower.includes('favicon') || 
+     lower.includes('avatar') || 
+     lower.includes('banner') || 
+     lower.includes('placeholder') || 
+     lower.includes('blank') || 
+     lower.includes('1x1') || 
+     lower.includes('ads') || 
+     lower.includes('advertisement') || 
+     lower.includes('pixel') ||
+     lower.includes('icon') ||
+     lower.includes('default') ||
+     lower.includes('author') ||
+     lower.includes('profile')
+  ) {
+     return false;
+  }
+  return true;
+};
 
-const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>, title: string, category: string) => {
+const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
   const target = e.currentTarget;
   if (target.getAttribute('data-failed-all')) return;
-  target.onerror = null; 
   
-  if (target.src.includes('pollinations.ai')) {
-    const hash = title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-    target.src = fallbackImages[hash % fallbackImages.length];
-    target.setAttribute('data-failed-some', 'true');
-    return;
-  }
+  const title = target.getAttribute('data-title') || 'news';
+  const prompt = `Editorial news photography, Getty Images style, high quality, news about: ${title}`;
+  const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=800&height=600&nologo=true`;
   
-  if (target.getAttribute('data-failed-some')) {
-    // If even fallback failed
-    target.src = 'https://via.placeholder.com/1200x800/111/555?text=No+Photo';
-    target.setAttribute('data-failed-all', 'true');
-    return;
-  }
-  
-  target.src = getAIImage(title, category);
+  target.setAttribute('data-failed-all', 'true');
+  target.src = fallbackUrl;
 };
 
-const getNoPhotoPlaceholder = () => "https://images.unsplash.com/photo-1594322436404-5a0526db4d13?q=80&w=1200&h=800&auto=format&fit=crop"; // A "No Photo" type image 
+// Skeleton Loader component
+const Skeleton: React.FC<{ className: string }> = ({ className }) => (
+  <div className={`animate-pulse bg-gray-200 dark:bg-gray-800 rounded-lg ${className}`}></div>
+);
+
+const NewsCardSkeleton = () => (
+  <div className="flex flex-col gap-4">
+    <Skeleton className="w-full h-48 sm:h-56 lg:h-64 rounded-3xl" />
+    <div className="flex flex-col gap-2">
+      <Skeleton className="w-1/4 h-4" />
+      <Skeleton className="w-full h-6" />
+      <Skeleton className="w-full h-6" />
+      <Skeleton className="w-1/2 h-4" />
+    </div>
+  </div>
+);
+
+const getNoPhotoPlaceholder = () => "https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1200&h=800"; 
+
+// Hero Banner Component
+const HeroBanner: React.FC<{ news: NewsArticle; onMoreInfo: (n: NewsArticle) => void; onPlay: (n: NewsArticle) => void; isPlaying?: boolean }> = ({ news, onMoreInfo, onPlay, isPlaying }) => (
+  <div className="relative w-full h-[70vh] md:h-[85vh] overflow-hidden">
+    {/* Background Image */}
+    <motion.img 
+      initial={{ scale: 1.1 }}
+      animate={{ scale: 1 }}
+      transition={{ duration: 10, repeat: Infinity, repeatType: "reverse" }}
+      src={news.image} 
+      alt={news.title}
+      className="absolute inset-0 w-full h-full object-cover"
+    />
+    {/* Overlays */}
+    <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/40 to-transparent"></div>
+    <div className="absolute inset-0 bg-gradient-to-r from-[#0f0f0f] via-transparent to-transparent"></div>
+    
+    {/* Content */}
+    <div className="absolute bottom-0 left-0 w-full p-6 pb-20 md:p-16 md:pb-36 flex flex-col gap-4 md:gap-6 z-30 max-w-4xl">
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.2 }}
+        className="flex items-center gap-2"
+      >
+        <span className="bg-red-600 text-white text-[10px] md:text-xs font-black px-2 py-1 rounded shadow-xl uppercase tracking-widest">
+          TOP NEWS
+        </span>
+        <span className="text-white/80 text-xs md:text-sm font-bold uppercase tracking-widest">
+          {news.source} • {news.time}
+        </span>
+      </motion.div>
+      
+      <motion.h1 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.3 }}
+        className="text-4xl md:text-7xl font-black text-white leading-[1.1] font-bengali drop-shadow-2xl"
+      >
+        {news.title}
+      </motion.h1>
+      
+      <motion.p 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.4 }}
+        className="text-gray-300 text-sm md:text-lg line-clamp-2 md:line-clamp-3 max-w-2xl font-bengali leading-relaxed"
+      >
+        {news.summary}
+      </motion.p>
+      
+      <motion.div 
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.5 }}
+        className="flex items-center gap-3 mt-4"
+      >
+        <button 
+          onClick={() => onPlay(news)}
+          className={`px-6 md:px-8 py-3 rounded-lg font-bold flex items-center gap-2 transition-all shadow-xl group ${isPlaying ? 'bg-red-600 text-white animate-pulse' : 'bg-white text-black hover:bg-white/90'}`}
+        >
+          {isPlaying ? (
+            <PauseCircle size={20} fill="currentColor" className="group-hover:scale-110 transition-transform" />
+          ) : (
+            <Play size={20} fill="currentColor" className="group-hover:scale-110 transition-transform" />
+          )}
+          <span className="font-bengali text-sm md:text-base">{isPlaying ? 'থামান' : 'শুনুন'}</span>
+        </button>
+        <button 
+          onClick={() => onMoreInfo(news)}
+          className="bg-gray-500/30 text-white px-6 md:px-8 py-3 rounded-lg font-bold flex items-center gap-2 hover:bg-gray-500/40 backdrop-blur-md transition-all border border-white/10 group"
+        >
+          <Info size={20} className="group-hover:rotate-12 transition-transform" />
+          <span className="font-bengali">বিস্তারিত</span>
+        </button>
+      </motion.div>
+    </div>
+  </div>
+);
+
+// News Card Component
+const NewsCard: React.FC<{ 
+  news: NewsArticle; 
+  onNewsClick: (n: NewsArticle) => void; 
+  onShareClick: (n: NewsArticle) => void;
+  onDownloadClick: (n: NewsArticle) => void;
+  isSaved: boolean;
+  onToggleBookmark: (e: React.MouseEvent, id: string) => void;
+}> = ({ news, onNewsClick, onShareClick, onDownloadClick, isSaved, onToggleBookmark }) => (
+  <motion.article 
+    layout
+    whileHover={{ y: -5 }}
+    className="group relative flex flex-col bg-[#141414] rounded-2xl overflow-hidden border border-white/5 hover:border-red-600/30 transition-all duration-300 shadow-xl cursor-pointer"
+    onClick={() => onNewsClick(news)}
+  >
+    <div className="aspect-[16/9] w-full overflow-hidden relative">
+      <img 
+        src={news.image} 
+        alt={news.title}
+        onError={handleImageError}
+        loading="lazy"
+        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-[#141414] via-transparent to-transparent opacity-80 group-hover:opacity-60 transition-opacity"></div>
+      
+      <div className="absolute top-3 left-3 z-10">
+        <span className="px-2.5 py-1 bg-red-600 text-[10px] font-black uppercase text-white rounded-lg shadow-lg backdrop-blur-sm border border-white/10">
+          {news.source}
+        </span>
+      </div>
+
+      <div className="absolute top-3 right-3 z-10 flex gap-2">
+        <button 
+          onClick={(e) => { e.stopPropagation(); onToggleBookmark(e, news.id); }}
+          className={`p-2 rounded-xl backdrop-blur-md transition-all ${isSaved ? 'bg-red-600 text-white shadow-red-600/50' : 'bg-black/40 text-white/70 hover:bg-black/60 hover:text-white border border-white/10'}`}
+        >
+          {isSaved ? <BookmarkCheck size={16} fill="currentColor" strokeWidth={2.5} /> : <Bookmark size={16} strokeWidth={2.5} />}
+        </button>
+      </div>
+    </div>
+
+    <div className="p-4 flex flex-col gap-3">
+      <div className="flex items-center gap-2 text-[11px] text-gray-500 font-bold uppercase tracking-wider">
+         <span className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse"></span>
+         <span>{news.time}</span>
+      </div>
+      
+      <h3 className="text-base md:text-lg font-bold font-bengali text-white line-clamp-2 leading-relaxed group-hover:text-red-500 transition-colors">
+        {news.title}
+      </h3>
+      
+      <p className="text-xs font-bengali text-gray-400 opacity-60 line-clamp-2 leading-relaxed group-hover:opacity-100 transition-opacity">
+        {news.summary}
+      </p>
+
+      <div className="pt-2 flex items-center justify-between mt-auto">
+         <div className="flex items-center gap-2">
+            <button 
+              onClick={(e) => { e.stopPropagation(); onShareClick(news); }}
+              className="p-2 rounded-xl bg-white/5 hover:bg-red-600 hover:text-white text-gray-400 transition-all border border-white/5"
+            >
+              <Share2 size={16} />
+            </button>
+         </div>
+         
+         <button className="text-[11px] font-black uppercase tracking-widest text-red-600 flex items-center gap-1 group/btn">
+            বিস্তারিত <ArrowRight size={14} className="group-hover/btn:translate-x-1 transition-transform" />
+         </button>
+      </div>
+    </div>
+  </motion.article>
+);
+
+// Administrative features moved to AdminApp
 
 
 const categoryStyles: Record<string, { accent: string, text: string, bg: string, gradient: string }> = {
@@ -123,7 +345,32 @@ const categoryStyles: Record<string, { accent: string, text: string, bg: string,
 
 type Tab = 'home' | 'national' | 'international' | 'sports' | 'tech' | 'entertainment' | 'visa' | 'photocards' | 'saved' | 'bangla' | 'english' | 'tv' | 'intl_tv';
 
+// Animated Bangladesh Flag Component
+const BDFlag = () => (
+  <motion.div
+    animate={{ 
+      rotate: [0, 2, -2, 0],
+      skewX: [0, 3, -3, 0],
+      y: [0, -1, 1, 0]
+    }}
+    transition={{ 
+      duration: 4, 
+      repeat: Infinity, 
+      ease: "easeInOut" 
+    }}
+    className="relative flex-shrink-0 w-6 h-4 md:w-8 md:h-[22px] bg-[#006a4e] rounded-[1px] shadow-[0_2px_10px_rgba(0,106,78,0.2)] ml-2.5 overflow-hidden flex items-center group-hover:scale-110 transition-transform cursor-pointer"
+  >
+    <div className="absolute w-[40%] aspect-square bg-[#f42a41] rounded-full left-[25%]" />
+    <motion.div 
+      animate={{ x: [-40, 60] }}
+      transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
+      className="absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent w-full h-full opacity-30"
+    />
+  </motion.div>
+);
+
 export default function App() {
+  const [isDarkMode, setIsDarkMode] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
   const [embeddedUrl, setEmbeddedUrl] = useState<{ url: string; name: string } | null>(null);
@@ -135,16 +382,100 @@ export default function App() {
   const [currentTickerIndex, setCurrentTickerIndex] = useState(0);
 
   const [liveNews, setLiveNews] = useState<NewsArticle[]>(topNews);
-  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(true);
   const [isScraping, setIsScraping] = useState(false);
   const [isGHSynced, setIsGHSynced] = useState(false);
   const [syncTime, setSyncTime] = useState('সদ্য আপডেট করা হয়েছে');
-  const [liveScore, setLiveScore] = useState({ runs: 156, wickets: 4, overs: 18.2 });
   const [prayerTime, setPrayerTime] = useState('পরবর্তী নামাজ: লোড হচ্ছে...');
-  const [currentDateString, setCurrentDateString] = useState('সোমবার, ২২ মে ২০২৪');
+  const [currentDateString, setCurrentDateString] = useState('');
+  const [currentTimeString, setCurrentTimeString] = useState('');
   const [articleTextSize, setArticleTextSize] = useState<'normal' | 'large' | 'xlarge'>('normal');
-  const [isAIBotOpen, setIsAIBotOpen] = useState(false);
+  const [lineSpacing, setLineSpacing] = useState<'tight' | 'normal' | 'relaxed'>('normal');
+  const [readerTheme, setReaderTheme] = useState<'dark' | 'light' | 'sepia'>('dark');
+  const [isReaderSettingsOpen, setIsReaderSettingsOpen] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
+  
+  // Auth & Admin State
+  const [user, setUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  
+  // Firestore News
+  const [dbNews, setDbNews] = useState<NewsArticle[]>([]);
+
+  // Auth Effect
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (currUser) => {
+      setUser(currUser);
+      if (currUser) {
+        // Simple admin check: if email is user's or specific one
+        setIsAdmin(currUser.email === 'faisalkabirrabi@gmail.com' || currUser.email?.includes('admin'));
+      } else {
+        setIsAdmin(false);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Firestore News Listener
+  useEffect(() => {
+    const q = query(collection(db, 'articles'), orderBy('publishedAt', 'desc'), limit(50));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const articles = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      })) as any[];
+      setDbNews(articles);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, 'articles');
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const handleTabChange = (tab: Tab) => {
+    setActiveTab(tab);
+    setSelectedCategory('all');
+    setIsMobileMenuOpen(false);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleLogin = async () => {
+    try {
+      const provider = new GoogleAuthProvider();
+      await signInWithPopup(auth, provider);
+      setIsAuthModalOpen(false);
+    } catch (error) {
+      console.error("Login failed:", error);
+    }
+  };
+
+  const handleLogout = async () => {
+    await signOut(auth);
+  };
+
+  // Helper to format relative time in Bengali
+  const getRelativeTimeBengali = (timestamp: number) => {
+    const diff = Date.now() - timestamp;
+    const minutes = Math.floor(diff / 60000);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (minutes < 1) return 'এই মুহূর্তে';
+    if (minutes < 60) return `${convertToBengaliDigit(minutes)} মিনিট আগে`;
+    if (hours < 24) return `${convertToBengaliDigit(hours)} ঘণ্টা আগে`;
+    if (days === 1) return '১ দিন আগে';
+    if (days < 7) return `${convertToBengaliDigit(days)} দিন আগে`;
+    return 'পুরাতন খবর';
+  };
+
+  const convertToBengaliDigit = (num: number) => {
+    const digits: { [key: string]: string } = {
+      '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
+      '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+    };
+    return num.toString().split('').map(d => digits[d] || d).join('');
+  };
 
   const dynamicCategories = React.useMemo(() => {
     const cats = new Set(liveNews.filter(n => n.category !== 'international' || activeTab === 'international').map(n => n.category));
@@ -160,11 +491,38 @@ export default function App() {
     return ['all', ...sorted];
   }, [liveNews, activeTab]);
 
-  const getTextSizeClass = () => {
+  const getReaderStyles = () => {
+    let classes = "";
+    
+    // Font size
     switch(articleTextSize) {
-      case 'large': return 'text-xl leading-relaxed';
-      case 'xlarge': return 'text-2xl leading-loose';
-      default: return 'text-lg leading-relaxed';
+      case 'large': classes += ' text-xl'; break;
+      case 'xlarge': classes += ' text-2xl'; break;
+      default: classes += ' text-lg';
+    }
+
+    // Line spacing
+    switch(lineSpacing) {
+      case 'tight': classes += ' leading-snug'; break;
+      case 'relaxed': classes += ' leading-loose'; break;
+      default: classes += ' leading-relaxed';
+    }
+
+    // Theme (applied to content container)
+    switch(readerTheme) {
+      case 'light': classes += ' text-gray-900'; break;
+      case 'sepia': classes += ' text-[#433422]'; break;
+      default: classes += ' text-gray-100';
+    }
+
+    return classes;
+  };
+
+  const getThemeBg = () => {
+    switch(readerTheme) {
+      case 'light': return 'bg-white';
+      case 'sepia': return 'bg-[#f4ecd8]';
+      default: return 'bg-[#0f0f0f]';
     }
   };
 
@@ -232,79 +590,147 @@ export default function App() {
     try {
       // Fetching multiple categories for better coverage
       const categories = [
+        // Google News General
         { url: 'https://news.google.com/rss?hl=bn&gl=BD&ceid=BD:bn', cat: 'national' },
         { url: 'https://news.google.com/rss/headlines/section/topic/WORLD?hl=bn&gl=BD&ceid=BD:bn', cat: 'international' },
         { url: 'https://news.google.com/rss/headlines/section/topic/SPORTS?hl=bn&gl=BD&ceid=BD:bn', cat: 'sports' },
         { url: 'https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=bn&gl=BD&ceid=BD:bn', cat: 'tech' },
         { url: 'https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=bn&gl=BD&ceid=BD:bn', cat: 'entertainment' },
         { url: 'https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en', cat: 'english' },
-        { url: 'https://www.banglanews24.com/rss/rss.xml', cat: 'national' },
+        // Top Newspapers
+        { url: 'https://www.prothomalo.com/feed', cat: 'national' },
         { url: 'https://www.ittefaq.com.bd/rss.xml', cat: 'national' },
-        { url: 'https://www.bd-pratidin.com/rss.xml', cat: 'national' }
+        { url: 'https://www.jugantor.com/rss.xml', cat: 'national' },
+        { url: 'https://kalerkantho.com/rss.xml', cat: 'national' },
+        { url: 'https://www.thedailystar.net/rss.xml', cat: 'english' },
+        { url: 'https://dailyinqilab.com/rss/rss.xml', cat: 'national' },
+        { url: 'https://www.bd-pratidin.com/rss.xml', cat: 'national' },
+        { url: 'https://www.dhakapost.com/rss', cat: 'national' },
+        { url: 'https://www.banglanews24.com/rss/rss.xml', cat: 'national' },
+        { url: 'https://www.jagonews24.com/rss/rss.xml', cat: 'national' },
+        { url: 'https://www.samakal.com/rss.xml', cat: 'national' },
+        { url: 'https://www.bhorerkagoj.com/feed', cat: 'national' },
+        { url: 'https://www.nayadiganta.com/rss.xml', cat: 'national' },
+        { url: 'https://www.risingbd.com/rss', cat: 'national' },
+        
+        // Television Channels
+        { url: 'https://news.google.com/rss/search?q=jamuna+tv+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
+        { url: 'https://news.google.com/rss/search?q=somoy+tv+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
+        { url: 'https://news.google.com/rss/search?q=channel+i+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
+        { url: 'https://news.google.com/rss/search?q=independent+tv+bangladesh&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' }
       ];
 
-      let allFetchedNews: NewsArticle[] = [];
 
-      // Try direct GitHub JSON fetch from the specific user-provided links
+
+      // Try dynamic News API fetch first (GNews)
+      const liveNewsPromise = async () => {
+        try {
+           const items = await fetchLiveNews('all');
+           return items.map(item => ({...item, isTopSource: true}));
+        } catch (e) {
+           console.warn('Live API fetch failed', e);
+           return [];
+        }
+      };
+
+      // Try direct GitHub JSON fetch from multiple possible locations
       const ghSources = [
-        'https://raw.githubusercontent.com/faisalkabirrabi-ux/my-news-portal/main/news.json',
         'https://raw.githubusercontent.com/faisalkabir/my-news-portal/main/news.json',
+        'https://raw.githubusercontent.com/faisalkabir/my-news-portal/main/data.json',
+        'https://raw.githubusercontent.com/faisalkabirrabi-ux/my-news-portal/main/news.json',
+        'https://raw.githubusercontent.com/faisalkabirrabi-ux/my-news-portal/main/data.json',
         'https://faisalkabirrabi-ux.github.io/my-news-portal/news.json',
         'https://faisalkabirrabi-ux.github.io/my-news-portal/data.json'
       ];
 
       console.log("Starting GitHub Sync...");
+      let ghSuccessCount = 0;
 
-      for (const ghUrl of ghSources) {
+      const ghPromises = ghSources.map(async (ghUrl) => {
         try {
-          const ghRes = await fetch(ghUrl + `?t=${Date.now()}`); 
+          const ghRes = await fetch(`${ghUrl}?nocache=${Date.now()}-${Math.random()}`); 
           if (ghRes.ok) {
             const ghData = await ghRes.json();
             console.log(`Successfully fetched from ${ghUrl}`, ghData);
-            setIsGHSynced(true);
+            
+            let ghMappedNews: NewsArticle[] = [];
+            
             if (Array.isArray(ghData)) {
-              const ghNews: NewsArticle[] = ghData.map((item: any, i: number) => ({
-                id: item.id || `gh-${i}-${Date.now()}`,
-                title: item.title || item.news_title || 'শিরোনাম নেই',
-                summary: item.summary || item.description || item.news_detail || 'সারসংক্ষেপ নেই',
-                content: item.content || item.summary || item.news_detail || '',
-                source: item.source || 'আমার নিউজ পোর্টাল',
-                time: item.time || 'সদ্য আপডেট (GitHub)',
-                image: item.image || item.news_image || getAIImage(item.title || item.news_title || 'সংবাদ', (item.category || item.news_category || 'national').toLowerCase()),
-                category: (item.category || item.news_category || 'national').toLowerCase() as any,
-                url: item.url || item.link || item.news_link || 'https://faisalkabirrabi-ux.github.io/my-news-portal/',
-                timestamp: Date.now() + 2000000 - i // Forced high priority
-              }));
-              allFetchedNews = [...allFetchedNews, ...ghNews];
+              ghMappedNews = ghData.map((item: any, i: number) => {
+                const cat = (item.category || item.news_category || 'national').toLowerCase();
+                const itemTimeStr = item.time || item.date || item.pubDate || '';
+                let itemTimestamp = Date.now() - (6 * 60 * 60 * 1000); 
+                
+                if (itemTimeStr) {
+                  const parsed = new Date(itemTimeStr).getTime();
+                  if (!isNaN(parsed) && parsed > 0) itemTimestamp = parsed;
+                }
+
+                let finalImage = item.image || item.news_image;
+                if (!isValidImageUrl(finalImage)) {
+                  finalImage = getVarietyImage(item.title || '', cat);
+                }
+
+                return {
+                  id: item.id || `gh-arr-${i}-${Date.now()}`,
+                  title: item.title || item.news_title || 'শিরোনাম নেই',
+                  summary: item.summary || item.description || 'সারসংক্ষেপ নেই',
+                  content: item.content || item.summary || '',
+                  source: item.source || 'গিটহাব আপডেট',
+                  time: getRelativeTimeBengali(itemTimestamp),
+                  image: finalImage,
+                  category: cat as any,
+                  url: item.url || item.link || '#',
+                  timestamp: itemTimestamp,
+                  isTopSource: true
+                };
+              });
             } else if (typeof ghData === 'object' && ghData !== null) {
-              // Truly automatic categorization based on JSON keys
               Object.entries(ghData).forEach(([key, items]) => {
                 if (Array.isArray(items)) {
                   const cat = key.toLowerCase();
-                  const mappedItems = items.map((item: any, i: number) => ({
-                    id: item.id || `gh-${cat}-${i}-${Date.now()}`,
-                    title: item.title || item.news_title || 'শিরোনাম নেই',
-                    summary: item.summary || item.description || item.news_detail || 'সারসংক্ষেপ নেই',
-                    content: item.content || item.summary || item.description || item.news_detail || '',
-                    source: item.source || 'আমার নিউজ পোর্টাল',
-                    time: item.time || 'সদ্য আপডেট (GitHub)',
-                    image: item.image || item.news_image || getAIImage(item.title || item.news_title || 'সংবাদ', cat),
-                    category: cat,
-                    url: item.link || item.url || item.news_link || 'https://faisalkabirrabi-ux.github.io/my-news-portal/',
-                    timestamp: Date.now() + 2000000 - i // Forced high priority
-                  }));
-                  allFetchedNews = [...allFetchedNews, ...mappedItems];
+                  const mapped = items.map((item: any, i: number) => {
+                    const itemTimeStr = item.time || item.date || item.pubDate || '';
+                    let itemTimestamp = Date.now() - (6 * 60 * 60 * 1000);
+                    
+                    if (itemTimeStr) {
+                      const parsed = new Date(itemTimeStr).getTime();
+                      if (!isNaN(parsed) && parsed > 0) itemTimestamp = parsed;
+                    }
+
+                    let finalImage = item.image || item.news_image;
+                    if (!isValidImageUrl(finalImage)) {
+                      finalImage = getVarietyImage(item.title || '', cat);
+                    }
+
+                    return {
+                      id: item.id || `gh-obj-${cat}-${i}-${Date.now()}`,
+                      title: item.title || item.news_title || 'শিরোনাম নেই',
+                      summary: item.summary || item.description || 'সারসংক্ষেপ নেই',
+                      content: item.content || item.summary || '',
+                      source: item.source || (cat === 'bangla' ? 'বিবিসি বাংলা' : item.source || 'গিটহাব'),
+                      time: getRelativeTimeBengali(itemTimestamp),
+                      image: finalImage,
+                      category: cat as any,
+                      url: item.url || item.link || '#',
+                      timestamp: itemTimestamp,
+                      isTopSource: true
+                    };
+                  });
+                  ghMappedNews = [...ghMappedNews, ...mapped];
                 }
               });
             }
-            console.log(`Added news items from GitHub, Total now: ${allFetchedNews.length}`);
+
+            return ghMappedNews;
           }
         } catch (err) {
-          console.warn(`Direct GH Sync failed for ${ghUrl}`, err);
+          console.warn(`GH Sync attempt failed for ${ghUrl}`, err);
         }
-      }
+        return [];
+      });
 
-      for (const feed of categories) {
+      const rssPromises = categories.map(async (feed) => {
         try {
           const cacheBuster = `t=${Date.now()}`;
           const finalUrl = feed.url.includes('?') ? `${feed.url}&${cacheBuster}` : `${feed.url}?${cacheBuster}`;
@@ -312,24 +738,32 @@ export default function App() {
           const data = await res.json();
           
           if (data.status === 'ok') {
-             const fNews: NewsArticle[] = data.items.map((item: any, i: number) => {
-               const sourceStr = item.title.includes(' - ') ? item.title.split(' - ').pop() : 'সংবাদ মাধ্যম';
+             return data.items.map((item: any, i: number) => {
+               let sourceStr = item.title.includes(' - ') ? item.title.split(' - ').pop() : (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
+               if (sourceStr && sourceStr.toLowerCase().includes('google news')) sourceStr = (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
                const titleStr = item.title.includes(' - ') ? item.title.substring(0, item.title.lastIndexOf(' - ')) : item.title;
                
-               // Try to extract image from enclosure, thumbnail, or description HTML
+               const topSources = ['Prothom Alo', 'Somoy TV', 'Jamuna TV', 'The Daily Star', 'প্রথম আলো', 'সময় টেলিভিশন', 'যমুনা টেলিভিশন', 'ইত্তেফাক', 'ইত্তেফাক ডটকম', 'বাংলাদেশ প্রতিদিন', 'কালের কণ্ঠ', 'চ্যানেল আই', 'NTV', 'একাত্তর টিভি'];
+               const isTopSource = topSources.some(s => sourceStr.toLowerCase().includes(s.toLowerCase()));
+
                let originalImage = '';
                if (item.enclosure && item.enclosure.link) {
                  originalImage = item.enclosure.link;
                } else if (item.thumbnail) {
                  originalImage = item.thumbnail;
                } else {
-                 // Extract from description HTML if available
                  const imgMatch = (item.description || '').match(/<img[^>]+src="([^">]+)"/);
                  if (imgMatch && imgMatch[1]) {
                    originalImage = imgMatch[1];
-                   // Ensure protocol is present
                    if (originalImage.startsWith('//')) originalImage = 'https:' + originalImage;
                  }
+               }
+
+               const itemTimestamp = new Date(item.pubDate).getTime();
+
+               let finalImage = originalImage;
+               if (!isValidImageUrl(finalImage)) {
+                 finalImage = getVarietyImage(titleStr, feed.cat);
                }
 
                return {
@@ -338,35 +772,48 @@ export default function App() {
                   summary: (item.description || '').replace(/<[^>]+>/g, '').substring(0, 150) + '...',
                   content: (item.content || titleStr).replace(/<[^>]+>/g, '') + `\n\nসূত্র: ${sourceStr}`,
                   source: sourceStr,
-                  time: 'সদ্য আপডেট',
-                  image: originalImage || getAIImage(titleStr, feed.cat),
+                  time: getRelativeTimeBengali(itemTimestamp),
+                  image: finalImage,
                   category: feed.cat,
                   url: item.link,
-                  timestamp: new Date(item.pubDate).getTime()
+                  timestamp: itemTimestamp,
+                  isTopSource: isTopSource
                };
              });
-             allFetchedNews = [...allFetchedNews, ...fNews];
           }
         } catch (e) {
           console.warn(`Failed to fetch ${feed.cat} news`, e);
         }
-      }
-      
-      // Deduplicate at the very top to prevent internal glitches
-      const freshUnique = new Map();
-      allFetchedNews.forEach(n => {
-        const key = `${n.title.trim().toLowerCase()}-${n.source}`;
-        if (!freshUnique.has(key)) freshUnique.set(key, n);
+        return [];
       });
-      const deduplicated = Array.from(freshUnique.values()) as NewsArticle[];
 
-      if (deduplicated.length > 0) {
-         setLiveNews(prev => {
+      // Helper to process and update state with new chunks of news incrementally
+      const processNewsChunk = (newArticles: NewsArticle[]) => {
+        if (newArticles.length === 0) return;
+        
+        const freshUnique = new Map();
+        newArticles.forEach(n => {
+          const key = `${n.title.trim().toLowerCase()}-${n.source}`;
+          if (!freshUnique.has(key)) freshUnique.set(key, n);
+        });
+        const deduplicated = Array.from(freshUnique.values()) as NewsArticle[];
+
+        setLiveNews(prev => {
+            const now = Date.now();
+            const twelveHoursAgo = now - (12 * 60 * 60 * 1000); // 12 hours in ms
+            
             const combined = [...deduplicated, ...prev];
             const unique = new Map();
+            
             combined.forEach(n => {
-               const titleKey = n.title.trim().toLowerCase();
-               // Keep the most recent version of the article
+               // Filter out news older than 12 hours
+               if (n.timestamp && n.timestamp < twelveHoursAgo) return;
+
+               // Robust deduplication key: title without source suffix
+               const titleKey = n.title.split(' - ')[0].trim().toLowerCase()
+                                      .replace(/[।\s]/g, ''); // Remove Bengali full stops and spaces
+               
+               // Keep the version with the highest timestamp (latest)
                if (!unique.has(titleKey)) {
                  unique.set(titleKey, n);
                } else {
@@ -376,47 +823,91 @@ export default function App() {
                  }
                }
             });
-            // Sort by timestamp descending
-            const sorted = Array.from(unique.values()).sort((a: any, b: any) => 
-               (b.timestamp || 0) - (a.timestamp || 0)
-            );
-            // Keep a healthy buffer for the news feed
-            return sorted.slice(0, 100) as NewsArticle[];
-         });
-         
-         const d = new Date();
-         setSyncTime(`সদ্য আপডেট: ${d.toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'})}`);
+
+            // Sort primarily by timestamp (latest first)
+            const sorted = Array.from(unique.values()).sort((a: any, b: any) => {
+               return (b.timestamp || 0) - (a.timestamp || 0);
+            });
+
+            const trulyUniqueIds = new Set();
+            const finalUnique = sorted.filter((n: any) => {
+               if (trulyUniqueIds.has(n.id)) return false;
+               trulyUniqueIds.add(n.id);
+               return true;
+            });
+
+            return finalUnique.slice(0, 100) as NewsArticle[];
+        });
+        
+        const d = new Date();
+        setSyncTime(`সদ্য আপডেট: ${d.toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'})}`);
+      };
+
+      // 1. Process Live API News & GitHub Data first to show updates instantly
+      const apiNews = await liveNewsPromise();
+      const ghResults = await Promise.all(ghPromises);
+      const flatGhNews = ghResults.flat();
+      const initialFastNews = [...apiNews, ...flatGhNews];
+      let hasFastNews = false;
+      if (initialFastNews.length > 0) {
+         hasFastNews = true;
+         if (flatGhNews.length > 0) {
+            ghSuccessCount++;
+            setIsGHSynced(true);
+         }
+         processNewsChunk(initialFastNews);
+         // Turn off the refreshing spinner since fast news is loaded
+         setIsRefreshing(false);
       }
+      
+      // 2. Let RSS load in background and append when ready
+      Promise.all(rssPromises).then(rssResults => {
+         const flatRssNews = rssResults.flat();
+         if (flatRssNews.length > 0) {
+             processNewsChunk(flatRssNews);
+         }
+      }).catch(e => {
+         console.error("RSS sync error", e);
+      }).finally(() => {
+         if (!hasFastNews) {
+            setIsRefreshing(false);
+         }
+         setTimeout(() => setIsScraping(false), 2000);
+      });
+
     } catch(e) {
       console.error("News sync failed", e);
-    } finally {
       setIsRefreshing(false);
-      setTimeout(() => setIsScraping(false), 2000);
+      setIsScraping(false);
     }
   }, []);
 
   React.useEffect(() => {
     fetchRSS();
-    // Refresh every 2 minutes for background updates
-    const newsInterval = setInterval(fetchRSS, 2 * 60 * 1000);
+    
+    // Auto-refresh when user returns to the app
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log("App became visible, refreshing news...");
+        fetchRSS();
+      }
+    };
 
-    const sportsInterval = setInterval(() => {
-       setLiveScore(prev => {
-          let nOvers = prev.overs + 0.1;
-          if ((nOvers * 10) % 10 > 5) {
-             nOvers = Math.floor(prev.overs) + 1.0;
-          }
-          return {
-             runs: prev.runs + Math.floor(Math.random() * 4), 
-             wickets: prev.wickets,
-             overs: parseFloat(nOvers.toFixed(1))
-          };
-       });
-    }, 12000);
+    const handleFocus = () => {
+      console.log("Window focused, refreshing news...");
+      fetchRSS();
+    };
+
+    window.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    // Refresh every 3 minutes for background updates
+    const newsInterval = setInterval(fetchRSS, 3 * 60 * 1000);
 
     return () => {
+       window.removeEventListener('visibilitychange', handleVisibilityChange);
+       window.removeEventListener('focus', handleFocus);
        clearInterval(newsInterval);
-       clearInterval(sportsInterval);
     };
   }, []);
 
@@ -436,13 +927,20 @@ export default function App() {
       return str.replace(/[0-9]/g, w => bnNumbers[Number(w)]);
     };
 
-    const d = new Date();
-    const dayName = days[d.getDay()];
-    const dateNum = engToBnNum(d.getDate().toString());
-    const monthName = months[d.getMonth()];
-    const yearNum = engToBnNum(d.getFullYear().toString());
-    
-    setCurrentDateString(`${dayName}, ${dateNum} ${monthName} ${yearNum}`);
+    const updateDateTime = () => {
+      const d = new Date();
+      const dayName = days[d.getDay()];
+      const dateNum = engToBnNum(d.getDate().toString());
+      const monthName = months[d.getMonth()];
+      const yearNum = engToBnNum(d.getFullYear().toString());
+      
+      setCurrentDateString(`${dayName}, ${dateNum} ${monthName} ${yearNum}`);
+      setCurrentTimeString(engToBnNum(d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true })).replace('AM', 'এএম').replace('PM', 'পিএম'));
+    };
+
+    updateDateTime();
+    const interval = setInterval(updateDateTime, 1000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleShare = async (news: NewsArticle) => {
@@ -639,11 +1137,6 @@ export default function App() {
     return filtered;
   };
 
-  const handleTabChange = (tab: Tab) => {
-    setActiveTab(tab);
-    setIsMobileMenuOpen(false);
-  };
-
   const toggleBookmark = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
     if (savedArticles.includes(id)) {
@@ -653,390 +1146,332 @@ export default function App() {
     }
   };
 
-  const NavButtons = () => (
-    <nav className="flex flex-wrap md:flex-nowrap gap-4 md:gap-6 items-center w-full overflow-x-auto pb-2 md:pb-0 scrollbar-hide shrink-0" aria-label="Main Navigation">
-      <button onClick={() => handleTabChange('home')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'home' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-300 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>হোম</button>
-      <button onClick={() => handleTabChange('national')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'national' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>বাংলাদেশ</button>
-      <button onClick={() => handleTabChange('international')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'international' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>আন্তর্জাতিক</button>
-      <button onClick={() => handleTabChange('sports')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'sports' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>খেলাধুলা</button>
-      <button onClick={() => handleTabChange('tech')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'tech' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>প্রযুক্তি</button>
-      <button onClick={() => handleTabChange('entertainment')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'entertainment' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>বিনোদন</button>
-      <button onClick={() => handleTabChange('visa')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'visa' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>ভিসা</button>
-      <div className="w-px h-4 bg-gray-700 shrink-0 hidden md:block"></div>
-      <button onClick={() => handleTabChange('photocards')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'photocards' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>
-        <ImageIcon className="w-3.5 h-3.5" aria-hidden="true" /> ফটো কার্ড
-      </button>
-      <button onClick={() => handleTabChange('saved')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 flex items-center gap-1 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none rounded-sm ${activeTab === 'saved' ? 'text-white border-b-2 border-red-600 pb-1' : 'text-gray-400 hover:text-red-500 border-b-2 border-transparent pb-1'}`}>
-        <Bookmark className="w-3.5 h-3.5" aria-hidden="true" /> সেভ করা
-      </button>
-      <div className="md:hidden w-px h-4 bg-gray-700 shrink-0"></div>
-      <button onClick={() => handleTabChange('bangla')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 text-blue-400 hover:text-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none rounded-sm ${activeTab === 'bangla' ? 'border-b-2 border-blue-500 pb-1' : 'border-b-2 border-transparent pb-1'}`}>পত্রিকা</button>
-      <button onClick={() => handleTabChange('english')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 text-blue-400 hover:text-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none rounded-sm ${activeTab === 'english' ? 'border-b-2 border-blue-500 pb-1' : 'border-b-2 border-transparent pb-1'}`}>English</button>
-      <button onClick={() => handleTabChange('tv')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 text-blue-400 hover:text-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none rounded-sm ${activeTab === 'tv' ? 'border-b-2 border-blue-500 pb-1' : 'border-b-2 border-transparent pb-1'}`}>টিভি চ্যানেল</button>
-      <button onClick={() => handleTabChange('intl_tv')} className={`font-bengali text-sm font-bold uppercase whitespace-nowrap tracking-wider transition-colors shrink-0 text-blue-400 hover:text-blue-300 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:outline-none rounded-sm ${activeTab === 'intl_tv' ? 'border-b-2 border-blue-500 pb-1' : 'border-b-2 border-transparent pb-1'}`}>আন্তর্জাতিক টিভি</button>
-    </nav>
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    show: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1
+      }
+    }
+  };
+
+  const itemVariants = {
+    hidden: { y: 20, opacity: 0 },
+    show: { y: 0, opacity: 1, transition: { type: 'spring', stiffness: 100 } }
+  };
+
+  const NavButtons = () => {
+    const navItems: {id: Tab, label: string, icon: any}[] = [
+      {id: 'home', label: 'হোম', icon: Home},
+      {id: 'bangla', label: 'পত্রিকা', icon: Newspaper},
+      {id: 'tv', label: 'লাইভ টিভি', icon: Tv},
+      {id: 'national', label: 'বাংলাদেশ', icon: MapPin},
+      {id: 'international', label: 'আন্তর্জাতিক', icon: Globe},
+      {id: 'sports', label: 'খেলাধুলা', icon: Trophy},
+      {id: 'tech', label: 'প্রযুক্তি', icon: Sparkles},
+      {id: 'entertainment', label: 'বিনোদন', icon: Tv},
+      {id: 'visa', label: 'ভিসা', icon: ExternalLink},
+      {id: 'saved', label: 'সেভ করা', icon: Bookmark},
+      {id: 'english', label: 'English', icon: Type},
+    ];
+
+    return (
+      <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 hide-scrollbar scroll-smooth">
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => { handleTabChange(item.id as Tab); }}
+            className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold transition-all flex items-center gap-2 whitespace-nowrap group active:scale-95 ${
+              activeTab === item.id 
+                ? 'bg-red-600 text-white shadow-xl shadow-red-600/30 font-extrabold scale-105' 
+                : isDarkMode 
+                  ? 'bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border border-white/5' 
+                  : 'bg-white text-gray-700 hover:bg-gray-50 hover:text-red-600 border border-gray-200 shadow-sm'
+            }`}
+          >
+            <item.icon size={17} strokeWidth={activeTab === item.id ? 3 : 2} className={activeTab === item.id ? 'text-white' : 'text-red-600'} />
+            <span className="font-bengali">{item.label}</span>
+          </button>
+        ))}
+        {/* Subtle end spacer for better scroll feeling */}
+        <div className="w-4 flex-shrink-0 md:hidden"></div>
+      </div>
+    );
+  };
+
+  const allFilteredNewsForDisplay = filterNews(
+    activeTab === 'saved' || activeTab === 'english' || activeTab === 'bangla'
+      ? undefined 
+      : (activeTab === 'home' 
+          ? (selectedCategory === 'all' ? undefined : selectedCategory)
+          : activeTab
+        )
   );
+  
+  const displayNews = (activeTab === 'home' && selectedCategory === 'all')
+    ? allFilteredNewsForDisplay.filter(n => !allFilteredNewsForDisplay.filter(top => top.isTopSource).slice(0, 4).some(top => top.id === n.id))
+    : allFilteredNewsForDisplay;
+
+  if (isAdminPanelOpen) {
+    return <AdminApp onBackToApp={() => setIsAdminPanelOpen(false)} />;
+  }
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-gray-200 font-sans flex flex-col">
+    <div className={`min-h-screen font-bengali transition-colors duration-500 overflow-x-hidden ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-gray-50 text-gray-900'}`}>
       {/* Top Utility Bar */}
-      <div className="bg-[#050505] border-b border-gray-900 px-4 md:px-8 py-1.5 flex justify-between items-center text-[10px] sm:text-xs text-gray-500 font-bengali tracking-wide">
-        <div className="flex items-center gap-3 md:gap-4 overflow-x-auto scrollbar-hide shrink-0">
-          <span className="hidden sm:block shrink-0">📅 {currentDateString}</span>
-          <span className="flex items-center gap-1 shrink-0 text-yellow-500/80">
-            <Coins className="w-3 h-3" /> $1 = ৳117.50
+      <div className={`px-4 md:px-8 py-2 flex justify-between items-center text-[10px] sm:text-xs font-bengali transition-all border-b ${isDarkMode ? 'bg-[#050505] border-white/5 text-gray-500' : 'bg-gray-100 border-gray-200 text-gray-600 shadow-sm'}`}>
+        <div className="flex items-center gap-3 md:gap-6 overflow-x-auto scrollbar-hide shrink-0">
+          <span className="hidden sm:inline-flex items-center gap-1.5 shrink-0"><Calendar className="w-3 h-3 text-red-600" /> {currentDateString}</span>
+          <span className={`flex items-center gap-1.5 shrink-0 font-bold ${isDarkMode ? 'text-gray-300' : 'text-gray-900'}`}>
+            <Clock className="w-3 h-3 text-red-600" /> {currentTimeString}
           </span>
-        </div>
-        <div className="flex items-center gap-3 md:gap-4 shrink-0">
-          {isScraping && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-1.5 text-red-500 animate-pulse px-2 py-0.5 bg-red-600/10 rounded-full border border-red-600/20"
-            >
-              <Bot className="w-3 h-3" />
-              <span className="text-[9px] font-bold">SCRAPER ACTIVE</span>
-            </motion.div>
-          )}
-          {isGHSynced && (
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="flex items-center gap-1.5 text-blue-500 px-2 py-0.5 bg-blue-600/10 rounded-full border border-blue-600/20"
-            >
-              <ExternalLink className="w-3 h-3" />
-              <span className="text-[9px] font-bold uppercase">GH synced</span>
-            </motion.div>
-          )}
-          <span className="hidden lg:flex items-center gap-1 text-emerald-600/80 shrink-0">
+          <span className={`hidden lg:flex items-center gap-1.5 shrink-0 font-bold ${isDarkMode ? 'text-emerald-500/80' : 'text-emerald-700'}`}>
             🕌 {prayerTime}
           </span>
+        </div>
+        <div className="flex items-center gap-3 shrink-0">
           <button 
             onClick={() => fetchRSS()}
             disabled={isRefreshing}
-            className={`hidden md:flex items-center gap-2 px-3 py-1 rounded-full bg-blue-500/10 hover:bg-blue-500/20 text-blue-400/90 hover:text-blue-300 transition-all shrink-0 focus:outline-none focus:ring-1 focus:ring-blue-500/50 ${isRefreshing ? 'opacity-50 cursor-not-allowed' : ''}`}
-            title="রিফ্রেশ করুন"
+            className={`flex items-center gap-2 px-3 py-1 rounded-full transition-all shrink-0 font-black uppercase text-[9px] tracking-widest ${isDarkMode ? 'bg-red-600 text-white hover:bg-red-700' : 'bg-red-600 text-white hover:bg-red-700 shadow-lg shadow-red-600/20'}`}
           >
-            <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
-            <span className="font-bold">{isRefreshing ? 'লোডিং...' : syncTime}</span>
+            {isRefreshing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            <span>{isRefreshing ? 'লোডিং...' : 'আপডেট'}</span>
           </button>
         </div>
       </div>
 
       {/* Header */}
-      <header className="bg-black/90 backdrop-blur-xl border-b border-white/5 px-4 md:px-8 py-4 sticky top-0 z-40 shadow-2xl">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="text-white font-black text-2xl md:text-3xl tracking-tighter flex items-center gap-2">
-              <span className="text-transparent bg-clip-text bg-gradient-to-r from-red-600 to-red-400">NEWS</span>
-              <motion.span 
-                animate={{ y: [0, -3, 0] }}
-                transition={{ 
-                  repeat: Infinity, 
-                  duration: 1.5, 
-                  ease: "easeInOut" 
-                }}
-                className="opacity-90 font-serif italic font-normal inline-block"
+      <header className={`sticky top-0 z-[100] backdrop-blur-xl border-b transition-all duration-500 py-3 ${isDarkMode ? 'bg-[#0a0a0a]/80 border-white/5 shadow-2xl' : 'bg-white/80 border-gray-200 shadow-sm'}`}>
+        <div className="max-w-7xl mx-auto px-4 md:px-8 flex flex-col gap-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+               <div 
+                  onClick={() => handleTabChange('home')}
+                  className="flex items-center gap-2 md:gap-3 cursor-pointer group"
+                >
+                  <div className="p-2 bg-red-600 rounded-xl shadow-lg">
+                     <Newspaper className="text-white w-5 h-5 md:w-6 md:h-6" strokeWidth={2.5} />
+                  </div>
+                  <div className="flex flex-col">
+                     <div className="flex items-center font-sans font-black text-xl md:text-2xl tracking-tighter uppercase select-none">
+                        <span className={isDarkMode ? 'text-white' : 'text-gray-900'}>News</span>
+                        <span className="bg-[#FF9900] text-black px-1.5 py-0.5 rounded ml-0.5 shadow-sm transform -rotate-1">Hub</span>
+                        <BDFlag />
+                     </div>
+                  </div>
+                </div>
+            </div>
+            
+            <div className="flex items-center gap-2 md:gap-3">
+              {isAdmin && (
+                <button 
+                  onClick={() => setIsAdminPanelOpen(true)}
+                  className="p-2 md:p-2.5 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+                >
+                  <ShieldCheck size={20} />
+                </button>
+              )}
+
+              {user ? (
+                <div className="flex items-center gap-2 group relative">
+                  <img 
+                    src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName || 'User'}`} 
+                    alt="Profile" 
+                    className="w-9 h-9 rounded-xl border-2 border-white/10 group-hover:border-red-600 transition-all cursor-pointer" 
+                  />
+                  <div className="absolute top-full right-0 mt-2 w-48 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl p-2 opacity-0 group-hover:opacity-100 transition-all pointer-events-none group-hover:pointer-events-auto z-[210]">
+                    <p className="px-4 py-2 text-[10px] font-bold text-gray-500 border-b border-white/5 truncate">{user.email}</p>
+                    <button 
+                      onClick={handleLogout}
+                      className="w-full flex items-center gap-2 px-4 py-3 text-xs font-bold text-red-500 hover:bg-white/5 rounded-xl transition-all"
+                    >
+                      <LogOut size={14} /> লগআউট করুন
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button 
+                  onClick={handleLogin}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-all ${isDarkMode ? 'bg-white/5 text-white border border-white/10' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
+                >
+                  <LogIn size={16} />
+                  <span className="hidden sm:inline font-bengali">লগইন</span>
+                </button>
+              )}
+
+              <button 
+                onClick={() => setIsSearchActive(!isSearchActive)}
+                className={`p-2 md:p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-white/5 text-white' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
               >
-                Hub
-              </motion.span>
+                <Search size={20} />
+              </button>
+
+              <button 
+                className={`md:hidden p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-white/5 text-white' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
+                onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+              >
+                {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
+              </button>
             </div>
-            <div className="h-6 w-[1px] bg-gray-800 mx-2 hidden md:block"></div>
-            <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-red-600/10 border border-red-600/20 rounded-full text-[10px] text-red-400 uppercase tracking-widest font-bold">
-              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse"></span> LIVE
-            </div>
-          </div>
-          
-          <div className="hidden md:flex items-center gap-6">
-            <NavButtons />
           </div>
 
-          <div className="flex items-center gap-4">
-            <div className={`bg-[#111] rounded-full flex items-center border border-gray-800 focus-within:border-gray-600 focus-within:bg-[#1a1a1a] focus-within:ring-2 focus-within:ring-red-500/20 transition-all ${isSearchActive ? 'w-48 px-4 py-2' : 'w-10 h-10 justify-center md:w-auto md:px-4 md:py-2 md:justify-start'}`}>
-              <button onClick={() => setIsSearchActive(!isSearchActive)} aria-label={isSearchActive ? "সার্চ বন্ধ করুন" : "সার্চ চালু করুন"} className="md:hidden flex items-center justify-center text-gray-400 hover:text-white focus:outline-none">
-                <Search className="w-4 h-4" />
-              </button>
-              <Search className="w-4 h-4 text-gray-400 hidden md:block" aria-hidden="true" />
-              <label htmlFor="news-search" className="sr-only">খবর সার্চ করুন</label>
-              <input 
-                id="news-search"
-                type="text" 
-                placeholder="সার্চ করুন..." 
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className={`bg-transparent border-none outline-none text-sm text-gray-200 placeholder-gray-600 font-bengali ${isSearchActive ? 'ml-2 w-full block' : 'hidden md:block md:ml-3'}`}
-              />
-            </div>
-            <button aria-label="মোবাইল মেনু" className="md:hidden p-2 rounded-full bg-[#111] border border-gray-800 text-gray-400 hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500" onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}>
-              {isMobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
+          <div className="hidden md:block w-full">
+             <NavButtons />
           </div>
         </div>
       </header>
 
-      {/* Trending Tags */}
-      <div className="bg-[#050505] border-b border-gray-900 py-2 px-4 md:px-8 overflow-x-auto scrollbar-hide">
-        <div className="flex items-center gap-4 text-xs font-bengali">
-          <span className="text-red-500 font-bold shrink-0 flex items-center gap-1"><TrendingUp className="w-3 h-3"/> ট্রেন্ডিং:</span>
-          {['ক্রিকেট', 'ফিলিস্তিন', 'স্মার্টফোন', 'কৃত্রিম বুদ্ধিমত্তা', 'ভিসা'].map(tag => (
-            <button 
-              key={tag}
-              onClick={() => {
-                setSearchQuery(tag);
-                setIsSearchActive(true);
-                setActiveTab('home');
-              }}
-              className="text-gray-400 hover:text-white bg-[#111] px-3 py-1 rounded-full border border-gray-800 hover:border-gray-600 hover:shadow-lg hover:shadow-red-600/5 transition-all shrink-0 whitespace-nowrap"
-            >
-              #{tag}
-            </button>
-          ))}
+      {/* Persistent Horizontal Navigation for Mobile */}
+      <div className={`md:hidden sticky top-[68px] z-[80] backdrop-blur-xl border-b transition-all ${isDarkMode ? 'bg-[#0a0a0a]/95 border-white/5' : 'bg-white/98 border-gray-100 shadow-sm'}`}>
+        <div className="px-4 py-2.5 overflow-hidden">
+          <NavButtons />
         </div>
       </div>
 
-      {/* Mobile Navigation */}
-        <AnimatePresence>
-          {isMobileMenuOpen && (
-            <motion.div 
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: 'auto', opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="md:hidden bg-[#0f0f0f] border-t border-gray-800 mt-4 px-2 py-4 flex flex-col gap-4 overflow-hidden"
-            >
-              <NavButtons />
-            </motion.div>
-          )}
-        </AnimatePresence>
 
       {/* Breaking Ticker */}
-      <div 
-        className="bg-red-600/10 border-b border-red-600/20 py-2 px-4 md:px-8 flex items-center overflow-hidden cursor-pointer hover:bg-red-600/20 transition-colors"
-        onClick={() => liveNews[currentTickerIndex] && setSelectedArticle(liveNews[currentTickerIndex])}
-      >
-        <span className="bg-red-600 text-white text-[10px] font-bold px-2 py-0.5 rounded mr-4 shrink-0 uppercase tracking-wider">ব্রেকিং নিউজ</span>
-        <div className="flex-1 relative h-5">
-          <AnimatePresence mode="popLayout">
-            {liveNews[currentTickerIndex] && (
-              <motion.p
-                key={currentTickerIndex}
-                initial={{ y: 20, opacity: 0 }}
-                animate={{ y: 0, opacity: 1 }}
-                exit={{ y: -20, opacity: 0 }}
-                transition={{ duration: 0.5 }}
-                className="text-sm font-medium text-gray-300 truncate italic font-bengali absolute inset-0 max-w-full hover:text-white transition-colors"
-              >
-                {liveNews[currentTickerIndex].title} — {liveNews[currentTickerIndex].summary}
-              </motion.p>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* Live Sports Ticker */}
-      <div className="bg-[#080808] border-b border-gray-800 py-2 px-4 md:px-8 flex items-center gap-4 md:gap-6 font-bengali overflow-x-auto scrollbar-hide">
-        <div className="flex items-center gap-2 shrink-0 border-r border-gray-800 pr-4">
-          <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse"></span>
-          <span className="font-bold text-gray-400 uppercase tracking-widest text-[10px]">লাইভ স্পোর্টস</span>
-        </div>
-        <div className="flex gap-4 min-w-max">
-          <div className="flex items-center gap-3 bg-[#111] px-3 py-1 rounded text-xs border border-gray-800">
-            <span className="font-bold text-green-500">BAN</span>
-            <span className="text-white font-bold">{liveScore.runs}/{liveScore.wickets}</span>
-            <span className="text-gray-500">({liveScore.overs})</span>
-            <span className="text-gray-600">vs</span>
-            <span className="font-bold text-blue-400">IND</span>
-            <span className="text-gray-400 italic text-[10px] ml-2">লাইভ আপডেট হচ্ছে...</span>
+      {liveNews.length > 0 && (
+        <div 
+          className={`border-b py-2 px-4 md:px-8 flex items-center overflow-hidden transition-colors ${isDarkMode ? 'bg-red-600/5 border-white/5' : 'bg-red-50 border-gray-200'}`}
+        >
+          <div className="flex items-center gap-2 mr-4 shrink-0">
+            <span className="bg-red-600 text-white text-[10px] font-black px-2 py-0.5 rounded shadow-lg uppercase tracking-widest">ব্রেকিং</span>
           </div>
-          <div className="flex items-center gap-3 bg-[#111] px-3 py-1 rounded text-xs border border-gray-800">
-            <span className="font-bold text-red-500">ENG</span>
-            <span className="text-white font-bold">210/2</span>
-            <span className="text-gray-500 text-[10px]">Won by 8 wkts</span>
-            <span className="text-gray-600">vs</span>
-            <span className="font-bold text-yellow-500">AUS</span>
-            <span className="font-bold text-gray-500">189/8</span>
-          </div>
-          <div className="flex items-center gap-3 bg-[#111] px-3 py-1 rounded text-xs border border-gray-800">
-            <span className="font-bold text-white">REAL MADRID</span>
-            <span className="text-white font-bold">2 - 1</span>
-            <span className="font-bold text-blue-500">BARCELONA</span>
-            <span className="text-red-500 animate-pulse text-[10px] ml-2">88'</span>
+          <div className="flex-1 relative h-5">
+            <AnimatePresence mode="popLayout">
+              {liveNews[currentTickerIndex % liveNews.length] && (
+                <motion.p
+                  key={currentTickerIndex % liveNews.length}
+                  initial={{ y: 20, opacity: 0 }}
+                  animate={{ y: 0, opacity: 1 }}
+                  exit={{ y: -20, opacity: 0 }}
+                  className={`text-sm font-bold truncate font-bengali absolute inset-0 cursor-pointer hover:text-red-600 transition-colors ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}
+                  onClick={() => setSelectedArticle(liveNews[currentTickerIndex % liveNews.length])}
+                >
+                  {liveNews[currentTickerIndex % liveNews.length].title}
+                </motion.p>
+              )}
+            </AnimatePresence>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Main Content */}
-      <main className="flex-1 w-full max-w-7xl mx-auto px-4 md:px-8 py-8 flex flex-col items-stretch">
+      <main className={`flex-1 w-full ${activeTab === 'home' ? 'max-w-full px-0' : 'max-w-7xl mx-auto px-4 md:px-8'} pb-8 flex flex-col items-stretch`}>
         
         {/* News Feed Sections */}
         {['home', 'national', 'international', 'sports', 'tech', 'entertainment', 'visa', 'saved', 'english', 'bangla'].includes(activeTab) && (
-          <div className="space-y-6">
-            
-            {activeTab === 'home' && (
-               <div className="flex items-center gap-2 overflow-x-auto pb-2 mb-2 scrollbar-hide no-scrollbar">
-                {dynamicCategories.map(cat => (
-                  <button
-                    key={cat}
-                    onClick={() => setSelectedCategory(cat)}
-                    className={`px-5 py-2.5 rounded-2xl text-[11px] font-black font-bengali whitespace-nowrap transition-all border ${
-                      selectedCategory === cat 
-                        ? 'bg-red-600 border-red-600 text-white shadow-xl shadow-red-600/30' 
-                        : 'bg-[#111] border-gray-800 text-gray-500 hover:border-gray-600 hover:text-white hover:bg-[#161616]'
-                    }`}
-                  >
-                    {cat === 'all' ? 'সব সংবাদ' : 
-                     cat === 'national' ? 'বাংলাদেশ' :
-                     cat === 'international' ? 'আন্তর্জাতিক' :
-                     cat === 'sports' ? 'খেলাধুলা' :
-                     cat === 'tech' ? 'প্রযুক্তি' :
-                     cat === 'entertainment' ? 'বিনোদন' :
-                     cat === 'visa' ? 'ভিসা' :
-                     cat === 'bangla' ? 'বাংলা সংবাদ' :
-                     cat === 'english' ? 'English News' : cat.toUpperCase()}
-                  </button>
-                ))}
-              </div>
-            )}
+          <div className="flex flex-col gap-0">
+             {activeTab === 'home' && selectedCategory === 'all' && (
+                <>
+                  {/* Hero Section */}
+                  {liveNews.length > 0 && (
+                    <HeroBanner 
+                      news={dbNews.length > 0 ? dbNews[0] : liveNews[0]} 
+                      onMoreInfo={(n) => setSelectedArticle(n)} 
+                      onPlay={(n) => handleSpeak(n.title + ". " + (n.content || n.summary))}
+                      isPlaying={isPlaying}
+                    />
+                  )}
 
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between mb-2 bg-[#111] rounded-t-2xl">
-              <h2 className="text-xs font-bold text-red-500 uppercase tracking-widest flex items-center gap-2 font-bengali">
-                {activeTab !== 'saved' && <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span>}
-                {activeTab === 'home' && (selectedCategory === 'all' ? 'শীর্ষ সংবাদ' : (
-                  selectedCategory === 'national' ? 'জাতীয় সংবাদ' :
-                  selectedCategory === 'international' ? 'আন্তর্জাতিক সংবাদ' :
-                  selectedCategory === 'sports' ? 'খেলার খবর' :
-                  selectedCategory === 'tech' ? 'প্রযুক্তি সংবাদ' :
-                  selectedCategory === 'entertainment' ? 'বিনোদন সংবাদ' :
-                  selectedCategory === 'visa' ? 'ভিসা ও ইমিগ্রেশন' : 
-                  selectedCategory === 'bangla' ? 'বাংলা সংবাদ' :
-                  selectedCategory === 'english' ? 'English News' : selectedCategory.toUpperCase()
-                ))}
-                {activeTab === 'national' && 'জাতীয় সংবাদ'}
-                {activeTab === 'international' && 'আন্তর্জাতিক সংবাদ'}
-                {activeTab === 'sports' && 'খেলার খবর'}
-                {activeTab === 'tech' && 'প্রযুক্তি সংবাদ'}
-                {activeTab === 'entertainment' && 'বিনোদন সংবাদ'}
-                {activeTab === 'visa' && 'ভিসা ও ইমিগ্রেশন'}
-                {activeTab === 'bangla' && 'বাংলা সংবাদ'}
-                {activeTab === 'english' && 'English News'}
-                {activeTab === 'saved' && 'সেভ করা খবর'}
-              </h2>
-            </div>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {filterNews(
-                activeTab === 'saved' || activeTab === 'english' || activeTab === 'bangla'
-                  ? undefined 
-                  : (activeTab === 'home' 
-                      ? (selectedCategory === 'all' ? undefined : selectedCategory)
-                      : activeTab
-                    )
-              ).length === 0 ? (
-                <div className="col-span-1 md:col-span-2 lg:col-span-3 text-center py-24 bg-[#111] rounded-3xl border border-dashed border-gray-800">
-                  <Bot className="w-12 h-12 text-gray-700 mx-auto mb-4 opacity-20" />
-                  <div className="text-gray-500 font-bengali text-lg">
-                    কোনো খবর পাওয়া যায়নি।
+                  <div className="max-w-7xl mx-auto w-full px-4 md:px-8 -mt-16 md:-mt-24 relative z-20 space-y-12 pb-20">
+                    {/* Quick Access Grid */}
+                    <div className="grid grid-cols-2 gap-4">
+                      <motion.div 
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleTabChange('bangla')}
+                        className="bg-red-600 rounded-3xl p-5 md:p-8 flex items-center justify-between cursor-pointer shadow-xl shadow-red-600/20 overflow-hidden relative group"
+                      >
+                         <div className="relative z-10">
+                            <h4 className="text-white font-black text-lg md:text-2xl font-bengali leading-tight">আজকের<br/>পত্রিকা</h4>
+                            <p className="text-white/70 text-xs mt-1 md:mt-2 font-bold uppercase tracking-widest">All Newspapers</p>
+                         </div>
+                         <Newspaper size={48} className="text-white/20 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
+                      </motion.div>
+
+                      <motion.div 
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={() => handleTabChange('tv')}
+                        className="bg-[#0f0f0f] border border-white/5 rounded-3xl p-5 md:p-8 flex items-center justify-between cursor-pointer shadow-2xl overflow-hidden relative group"
+                      >
+                         <div className="relative z-10">
+                            <h4 className="text-white font-black text-lg md:text-2xl font-bengali leading-tight">লাইভ<br/>টিভি</h4>
+                            <p className="text-red-600 text-xs mt-1 md:mt-2 font-bold uppercase tracking-widest flex items-center gap-1.5">
+                               <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Live News TV
+                            </p>
+                         </div>
+                         <Tv size={48} className="text-white/10 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
+                      </motion.div>
+                    </div>
+
+                    {/* Trending Now */}
+                    <NewsRow 
+                      title="এখন ট্রেন্ডিং" 
+                      news={liveNews.filter(n => n.isTopSource).slice(0, 10)} 
+                      onNewsClick={setSelectedArticle}
+                    />
+
+                    {/* Firestore Admin News */}
+                    {dbNews.length > 0 && (
+                       <NewsRow 
+                         title="সরাসরি আপডেট" 
+                         news={dbNews} 
+                         onNewsClick={setSelectedArticle}
+                       />
+                    )}
+
+                    {/* Categories Rows */}
+                    {['national', 'sports', 'tech', 'entertainment'].map(cat => {
+                       const catNews = liveNews.filter(n => n.category === cat).slice(0, 10);
+                       if (catNews.length === 0) return null;
+                       return (
+                        <div key={cat}>
+                          <NewsRow 
+                            title={cat === 'national' ? 'জাতীয় সংবাদ' : cat === 'sports' ? 'খেলাধুলা' : cat === 'tech' ? 'বিজ্ঞান ও প্রযুক্তি' : 'বিনোদন'} 
+                            news={catNews} 
+                            onNewsClick={setSelectedArticle}
+                          />
+                        </div>
+                       );
+                    })}
                   </div>
-                  <button 
-                    onClick={() => fetchRSS()}
-                    className="mt-6 px-6 py-2 bg-red-600 text-white rounded-full font-bengali text-sm hover:bg-red-700 transition-colors"
-                  >
-                    আবার চেষ্টা করুন
-                  </button>
-                </div>
-              ) : (
-                <AnimatePresence mode="popLayout">
-                  {filterNews(
-                    activeTab === 'saved' || activeTab === 'english' || activeTab === 'bangla'
-                      ? undefined 
-                      : (activeTab === 'home' 
-                          ? (selectedCategory === 'all' ? undefined : selectedCategory)
-                          : activeTab
-                        )
-                  ).map((news) => {
-                const style = categoryStyles[news.category] || categoryStyles.default;
-                return (
-                  <motion.article 
-                    key={news.id} 
-                    tabIndex={0}
-                    role="button"
-                    aria-label={news.title}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedArticle(news); } }}
-                    whileHover={{ y: -8, scale: 1.02 }}
-                    className={`bg-[#0f0f0f] border border-gray-800/80 rounded-3xl group cursor-pointer hover:border-gray-700/50 shadow-xl ${style.gradient} focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none transition-all duration-500 flex flex-col overflow-hidden relative`}
-                    onClick={() => setSelectedArticle(news)}
-                  >
-                    {/* Glossy Overlay on Hover */}
-                    <div className="absolute inset-0 bg-gradient-to-br from-white/5 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500 z-0 pointer-events-none"></div>
-                    
-                    <div className="absolute top-4 right-4 z-30 flex flex-col gap-2">
-                      <button 
-                        onClick={(e) => toggleBookmark(e, news.id)}
-                        className="p-2.5 bg-black/40 rounded-xl hover:bg-black/90 backdrop-blur-md transition-all border border-white/5 opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-500"
-                        aria-label={savedArticles.includes(news.id) ? "রিমুভ করুন" : "সেভ করুন"}
-                        title={savedArticles.includes(news.id) ? "রিমুভ করুন" : "সেভ করুন"}
-                      >
-                        {savedArticles.includes(news.id) ? (
-                          <BookmarkCheck className="w-4 h-4 text-green-400" aria-hidden="true" />
-                        ) : (
-                          <Bookmark className="w-4 h-4 text-white" aria-hidden="true" />
-                        )}
-                      </button>
-                      <button 
-                        onClick={(e) => { e.stopPropagation(); handleShare(news); }}
-                        className="p-2.5 bg-black/40 rounded-xl hover:bg-black/90 backdrop-blur-md transition-all border border-white/5 opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-2 focus:ring-red-500"
-                        aria-label="শেয়ার করুন"
-                        title="শেয়ার করুন"
-                      >
-                        <Share2 className="w-4 h-4 text-white" aria-hidden="true" />
-                      </button>
-                    </div>
+                </>
+             )}
 
-                    <div className="h-60 overflow-hidden relative bg-gray-900">
-                      <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-transparent to-black/20 z-10 pointer-events-none"></div>
-                      <img 
-                        loading="lazy" 
-                        src={news.image} 
-                        alt="" 
-                        referrerPolicy="no-referrer"
-                        onError={(e) => handleImageError(e, news.title, news.category)}
-                        className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-1000 ease-out" 
+             {/* Standard Grid for other tabs or filtered home */}
+             {((activeTab !== 'home') || (activeTab === 'home' && selectedCategory !== 'all')) && (
+                <>
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-2xl md:text-4xl font-black font-bengali text-white flex items-center gap-4">
+                      <span className="w-2 h-10 bg-red-600 rounded-full"></span>
+                      {activeTab === 'home' ? (selectedCategory === 'all' ? 'শীর্ষ সংবাদ' : selectedCategory) : (activeTab === 'national' ? 'বাংলাদেশ' : activeTab === 'international' ? 'আন্তর্জাতিক' : activeTab === 'sports' ? 'খেলাধুলা' : activeTab === 'tech' ? 'প্রযুক্তি' : activeTab === 'entertainment' ? 'বিনোদন' : activeTab === 'visa' ? 'ভিসা ও তথ্য' : activeTab === 'saved' ? 'আপনার নির্বাচিত সংবাদ' : activeTab === 'english' ? 'English News' : 'পত্রিকা')}
+                    </h3>
+                  </div>
+
+                  <motion.div 
+                    variants={containerVariants}
+                    initial="hidden"
+                    animate="show"
+                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8"
+                  >
+                    {displayNews.map((news) => (
+                      <NewsCard 
+                         key={news.id} 
+                         news={news} 
+                         onNewsClick={setSelectedArticle} 
+                         onShareClick={handleShare}
+                         onDownloadClick={handleDownloadImage}
+                         isSaved={savedArticles.includes(news.id)}
+                         onToggleBookmark={toggleBookmark}
                       />
-                      <div className={`absolute top-4 left-4 ${style.accent} backdrop-blur-md text-white text-[10px] font-black px-3 py-1.5 rounded-lg uppercase tracking-[0.15em] z-20 shadow-[0_4px_12px_rgba(0,0,0,0.5)] border border-white/10`}>
-                    {style.accent.includes('emerald') ? 'বাংলাদেশ' : 
-                     style.accent.includes('blue') && news.category === 'international' ? 'আন্তর্জাতিক' : 
-                     news.category === 'sports' ? 'খেলাধুলা' : 
-                     news.category === 'tech' ? 'প্রযুক্তি' : 
-                     news.category === 'entertainment' ? 'বিনোদন' : 
-                     news.category === 'visa' ? 'ভিসা' : 
-                     news.category === 'bangla' ? 'বাংলা' :
-                     news.category === 'english' ? 'English' : news.category}
-                      </div>
-                    </div>
-
-                    <div className={`p-6 flex-1 flex flex-col bg-gradient-to-b ${style.bg} to-[#0a0a0a] transition-all duration-500`}>
-                      <div className="flex items-center gap-2 mb-3">
-                         <div className={`w-1 h-4 ${style.accent} rounded-full`}></div>
-                         <span className={`text-[10px] font-black uppercase tracking-widest ${style.text}`}>{news.source}</span>
-                      </div>
-                      <h3 className="text-xl font-bold font-bengali leading-snug mb-3 line-clamp-2 text-white group-hover:text-white transition-colors tracking-tight">{news.title}</h3>
-                      <p className="text-sm font-bengali text-gray-400 leading-relaxed line-clamp-3 mb-6 opacity-80 group-hover:opacity-100 transition-opacity">{news.summary}</p>
-                      
-                      <div className="mt-auto flex items-center justify-between text-[10px] text-gray-500 font-bold uppercase tracking-widest pt-5 border-t border-white/5">
-                        <div className="flex items-center gap-2">
-                           <RefreshCw className="w-3 h-3 group-hover:rotate-180 transition-transform duration-700" />
-                           <span>{news.time}</span>
-                        </div>
-                        <div className="flex items-center gap-1 group/btn text-gray-400 group-hover:text-white transition-colors">
-                          <span className="font-bengali">বিস্তারিত</span>
-                          <ArrowUpRight className="w-3.5 h-3.5 group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5 transition-transform" />
-                        </div>
-                      </div>
-                    </div>
-                  </motion.article>
-                )})}
-                </AnimatePresence>
-              )}
-            </div>
+                    ))}
+                  </motion.div>
+                </>
+             )}
           </div>
         )}
 
@@ -1049,57 +1484,54 @@ export default function App() {
               </h2>
             </div>
             
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8">
-              {liveNews.slice(0, 9).map(news => (
-                <div key={`card-${news.id}`} className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-10">
+              {liveNews.filter(n => !!n.image).slice(0, 12).map((news, idx) => (
+                <div key={`card-${news.id}-${idx}`} className="flex flex-col gap-5">
                   <div 
-                    tabIndex={0}
-                    role="button"
-                    aria-label={`ফটোকার্ড: ${news.title}`}
-                    onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleShare(news); } }}
-                    className="relative aspect-square bg-[#0f0f0f] overflow-hidden rounded-2xl group border border-gray-800/80 hover:border-gray-700 focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:outline-none transition-all duration-500 shadow-2xl hover:shadow-red-600/5"
+                    className="relative aspect-square bg-[#141414] overflow-hidden rounded-[2.5rem] group border border-white/5 hover:border-red-600/30 transition-all duration-700 shadow-2xl cursor-pointer"
+                    onClick={() => handleShare(news)}
                   >
                     <img 
-                      loading="lazy" 
                       src={news.image} 
-                      alt="" 
-                      referrerPolicy="no-referrer"
-                      onError={(e) => handleImageError(e, news.title, news.category)}
-                      className="absolute inset-0 w-full h-full object-cover opacity-60 group-hover:opacity-80 group-hover:scale-105 transition-all duration-700" 
+                      alt={news.title}
+                      className="absolute inset-0 w-full h-full object-cover transition-transform duration-1000 group-hover:scale-110 opacity-60"
                     />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/50 to-transparent"></div>
+                    <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent"></div>
                     
-                    <div className="relative z-10 p-6 flex flex-col h-full">
+                    <div className="relative z-10 p-8 flex flex-col h-full">
                       <div className="flex justify-between items-start mb-auto">
-                        <span className="bg-white/10 backdrop-blur-md text-white border border-white/20 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest shadow-sm">
+                        <div className="p-3 bg-red-600 rounded-2xl shadow-xl shadow-red-600/30">
+                          <Newspaper size={20} className="text-white" />
+                        </div>
+                        <span className="bg-black/40 backdrop-blur-md text-white border border-white/10 text-[9px] font-black px-4 py-1.5 rounded-full uppercase tracking-[0.2em] shadow-2xl">
                           {news.source}
                         </span>
-                        <span className="text-white/40 text-[10px] font-bengali uppercase tracking-widest font-bold tracking-widest">NewsHub BD</span>
                       </div>
                       
                       <div className="mt-auto">
-                        <h3 className="text-2xl font-bold font-bengali text-white leading-snug mb-3 drop-shadow-md">
-                          "{news.title}"
+                        <div className="w-10 h-1 bg-red-600 rounded-full mb-4 group-hover:w-20 transition-all duration-500"></div>
+                        <h3 className="text-2xl md:text-3xl font-black font-bengali text-white leading-tight mb-4 group-hover:text-red-500 transition-colors">
+                          {news.title}
                         </h3>
-                        <p className="text-gray-300 font-bengali text-sm line-clamp-3 opacity-90 leading-relaxed">{news.summary}</p>
+                        <p className="text-gray-400 font-bengali text-sm md:text-base line-clamp-3 opacity-80 leading-relaxed group-hover:opacity-100 transition-opacity">
+                          {news.summary}
+                        </p>
                       </div>
                     </div>
                   </div>
                   
-                  <div className="flex gap-3 px-1">
+                  <div className="flex gap-4 px-2">
                     <button 
                       onClick={() => handleShare(news)}
-                      aria-label={`${news.title} শেয়ার করুন`}
-                      className="flex-1 bg-[#1a1a1a] hover:bg-[#222] border border-gray-800 text-gray-300 font-bengali py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all hover:text-white focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="flex-1 bg-white text-black font-black py-4 rounded-2xl flex items-center justify-center gap-2 transition-all hover:bg-red-600 hover:text-white shadow-xl"
                     >
-                      <Share2 className="w-4 h-4" /> শেয়ার করুন
+                      <Share2 className="w-5 h-5" /> শেয়ার
                     </button>
                     <button 
                       onClick={() => handleDownloadImage(news)}
-                      aria-label={`${news.title} ফটোকার্ড সেভ করুন`}
-                      className="flex-1 bg-red-600/10 hover:bg-red-600/20 border border-red-600/20 text-red-400 font-bengali py-2.5 rounded-xl flex items-center justify-center gap-2 transition-all font-semibold focus:outline-none focus:ring-2 focus:ring-red-500"
+                      className="p-4 bg-white/5 border border-white/10 text-white rounded-2xl hover:bg-white/10 transition-all shadow-xl"
                     >
-                      <Download className="w-4 h-4" /> সেভ ছবি
+                      <Download className="w-5 h-5" />
                     </button>
                   </div>
                 </div>
@@ -1110,15 +1542,15 @@ export default function App() {
 
         {/* Media Sources Sections */}
         {(activeTab === 'bangla' || activeTab === 'english' || activeTab === 'tv' || activeTab === 'intl_tv') && (
-          <div className="space-y-8">
-            <div className="p-4 border-b border-gray-800 flex items-center justify-between mb-6 bg-[#111] rounded-t">
-              <h2 className="text-xs font-bold text-blue-500 uppercase tracking-widest flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-blue-600 animate-pulse"></span>
-                {activeTab === 'intl_tv' ? 'আন্তর্জাতিক টিভি চ্যানেল' : activeTab === 'tv' ? 'লাইভ টিভি চ্যানেল' : activeTab === 'bangla' ? 'বাংলা পত্রিকা' : 'English Newspapers'}
-              </h2>
+          <div className="space-y-10">
+            <div className="flex flex-col gap-2">
+               <h2 className="text-2xl md:text-3xl font-black font-bengali text-white flex items-center gap-4">
+                 <span className="w-1.5 h-8 bg-blue-600 rounded-full"></span>
+                 {activeTab === 'intl_tv' ? 'আন্তর্জাতিক টিভি' : activeTab === 'tv' ? 'লাইভ টিভি' : activeTab === 'bangla' ? 'বাংলা পত্রিকা' : 'English Papers'}
+               </h2>
             </div>
 
-            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-5">
               {(activeTab === 'bangla' ? banglaPapers : activeTab === 'english' ? englishPapers : activeTab === 'intl_tv' ? internationalChannels : tvChannels).map((source) => (
                 <motion.button
                   key={source.id}
@@ -1132,23 +1564,21 @@ export default function App() {
                       setEmbeddedUrl({ url: source.url, name: source.name });
                     }
                   }}
-                  className="bg-[#111] border border-gray-800 rounded p-4 flex flex-col items-center justify-center gap-3 hover:bg-[#1a1a1a] hover:border-gray-600 hover:shadow-xl hover:shadow-blue-900/5 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all group aspect-square"
+                  className="bg-[#141414] border border-white/5 rounded-2xl p-5 flex flex-col items-center justify-center gap-4 hover:bg-[#1a1a1a] hover:border-blue-600/30 transition-all group aspect-square relative"
                 >
-                  <div className="w-14 h-14 rounded-full bg-white/95 flex items-center justify-center p-2 shadow-inner group-hover:bg-white group-hover:shadow-[0_0_15px_rgba(220,38,38,0.3)] transition-all overflow-hidden border border-gray-700/50">
-                    <img 
-                      loading="lazy"
-                      src={`https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}&sz=128`} 
-                      alt="" 
-                      referrerPolicy="no-referrer"
-                      className="w-full h-full object-contain filter group-hover:brightness-110"
-                      onError={(e) => {
-                        e.currentTarget.style.display = 'none';
-                        e.currentTarget.nextElementSibling?.classList.remove('hidden');
-                      }}
-                    />
-                    <span className="hidden text-xs font-bold text-gray-800 uppercase" aria-hidden="true">{source.logoText}</span>
+                  <div className="w-16 h-16 rounded-2xl bg-white flex items-center justify-center p-2 shadow-xl group-hover:shadow-blue-600/20 transition-all overflow-hidden border border-white/10">
+                    {source.logo ? (
+                      <img 
+                        src={source.logo} 
+                        alt={source.name} 
+                        className="w-full h-full object-contain group-hover:scale-110 transition-transform duration-500" 
+                        referrerPolicy="no-referrer"
+                      />
+                    ) : (
+                      <span className="text-sm font-black text-gray-900 uppercase" aria-hidden="true">{source.logoText || source.name.substring(0,2)}</span>
+                    )}
                   </div>
-                  <span className="font-medium text-sm text-gray-300 group-hover:text-white font-bengali">
+                  <span className="font-bold text-[13px] text-gray-400 group-hover:text-white font-bengali text-center leading-tight">
                     {source.name}
                   </span>
                 </motion.button>
@@ -1174,106 +1604,151 @@ export default function App() {
               animate={{ y: 0, scale: 1 }}
               exit={{ y: 20, scale: 0.95 }}
               onClick={(e) => e.stopPropagation()}
-              className="bg-[#0f0f0f] border border-gray-800 rounded-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto shadow-2xl relative"
+              className="bg-[#0f0f0f] border border-gray-800 rounded-2xl w-full max-w-4xl max-h-[92vh] overflow-y-auto shadow-2xl relative"
             >
-              <button 
-                onClick={() => closeArticle()}
-                className="absolute top-4 right-4 p-2 bg-black/50 backdrop-blur rounded text-white hover:bg-red-600 focus:outline-none focus:ring-2 focus:ring-red-500 transition-colors z-30 border border-white/10"
-                aria-label="বন্ধ করুন"
-              >
-                <X className="w-5 h-5" />
-              </button>
-              
-              <div className="h-64 sm:h-80 w-full relative bg-gray-900 border-b border-gray-800">
-                <div className="absolute inset-0 bg-gradient-to-t from-[#0f0f0f] via-[#0f0f0f]/40 to-transparent z-10 pointer-events-none"></div>
-                <img 
-                  loading="lazy" 
-                  src={selectedArticle.image} 
-                  alt="" 
-                  referrerPolicy="no-referrer"
-                  onError={(e) => handleImageError(e, selectedArticle.title, selectedArticle.category)}
-                  className="w-full h-full object-cover" 
-                />
-              </div>
-              
-              <div className="p-6 md:p-10 font-bengali relative z-20">
-                <div className="flex items-center gap-3 text-xs text-gray-500 mb-4 uppercase tracking-widest flex-wrap">
-                  <span className="bg-red-600/20 text-red-500 border border-red-600/30 px-2 py-0.5 rounded font-bold">
+              {/* Sticky Reader Header */}
+              <div className={`sticky top-0 z-[100] border-b backdrop-blur-xl px-4 md:px-8 py-3 flex items-center justify-between transition-colors duration-500 ${readerTheme === 'dark' ? 'bg-[#0f0f0f]/90 border-white/5' : (readerTheme === 'sepia' ? 'bg-[#f4ecd8]/90 border-orange-200' : 'bg-white/90 border-gray-200')}`}>
+                <div className="flex items-center gap-3">
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-1.5">
+                      <div className="w-6 h-6 bg-red-600 rounded flex items-center justify-center shadow-lg shadow-red-600/20">
+                        <Newspaper size={14} className="text-white" />
+                      </div>
+                      <span className={`font-black text-xs uppercase tracking-tighter ${readerTheme === 'dark' ? 'text-white' : 'text-gray-900'}`}>NewsHub</span>
+                    </div>
+                  </div>
+                  <div className={`w-px h-6 mx-1 ${readerTheme === 'dark' ? 'bg-white/10' : 'bg-gray-200'}`}></div>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-widest ${readerTheme === 'dark' ? 'bg-red-600/20 text-red-500 border border-red-600/30' : 'bg-red-600 text-white'}`}>
                     {selectedArticle.source}
                   </span>
-                  <span>•</span>
-                  <span>{selectedArticle.time}</span>
-                  
-                  <div className="ml-auto flex items-center gap-2">
-                    <div className="flex items-center gap-1 bg-[#111] border border-gray-800 rounded-full px-2 py-1 mr-2" role="group" aria-label="ফন্ট সাইজ পরিবর্তন করুন">
-                       <button onClick={() => setArticleTextSize('normal')} className={`p-1 rounded-full focus:outline-none focus:ring-1 focus:ring-red-500 ${articleTextSize === 'normal' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-white'}`} aria-label="ছোট ফন্ট">
-                         <Type className="w-3 h-3" />
-                       </button>
-                       <button onClick={() => setArticleTextSize('large')} className={`p-1 rounded-full focus:outline-none focus:ring-1 focus:ring-red-500 ${articleTextSize === 'large' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-white'}`} aria-label="মাঝারি ফন্ট">
-                         <Type className="w-4 h-4" />
-                       </button>
-                       <button onClick={() => setArticleTextSize('xlarge')} className={`p-1 rounded-full focus:outline-none focus:ring-1 focus:ring-red-500 ${articleTextSize === 'xlarge' ? 'bg-gray-800 text-white' : 'text-gray-500 hover:text-white'}`} aria-label="বড় ফন্ট">
-                         <Type className="w-5 h-5" />
-                       </button>
-                    </div>
-                    <button 
-                      onClick={() => handleSpeak(selectedArticle.title + ". " + selectedArticle.content)}
-                      aria-label={isPlaying ? "অডিও থামান" : "খবরটি অডিও হিসেবে শুনুন"}
-                      className={`px-3 py-1.5 rounded-full flex items-center gap-2 transition-colors border focus:outline-none focus:ring-2 focus:ring-red-500 ${isPlaying ? 'bg-red-600/20 text-red-500 border-red-600/30' : 'bg-[#111] text-gray-400 border-gray-800 hover:text-white hover:bg-gray-800'}`}
-                    >
-                      {isPlaying ? <PauseCircle className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
-                      <span className="font-bengali font-bold hidden sm:inline" aria-hidden="true">{isPlaying ? 'থামান' : 'খবরটি শুনুন'}</span>
-                    </button>
-                    
-                    <button 
-                      onClick={() => handleShare(selectedArticle)}
-                      aria-label="শেয়ার করুন"
-                      className="bg-[#111] text-gray-400 border border-gray-800 hover:text-white hover:bg-gray-800 px-3 py-1.5 rounded-full flex items-center gap-2 transition-colors focus:outline-none focus:ring-2 focus:ring-red-500"
-                    >
-                      <Share2 className="w-4 h-4" />
-                      <span className="font-bengali font-bold hidden sm:inline" aria-hidden="true">শেয়ার</span>
-                    </button>
+                </div>
 
-                    <a 
-                      href={selectedArticle.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="bg-blue-600/10 text-blue-400 border border-blue-600/20 hover:bg-blue-600/20 px-3 py-1.5 rounded-full flex items-center gap-2 transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 ml-2"
-                    >
-                      <ExternalLink className="w-4 h-4" />
-                      <span className="font-bengali font-bold hidden sm:inline">বিস্তারিত</span>
-                    </a>
-                  </div>
+                <div className="flex items-center gap-2">
+                   {/* Reader Settings */}
+                   <div className="relative">
+                      <button 
+                        onClick={() => setIsReaderSettingsOpen(!isReaderSettingsOpen)}
+                        className={`p-2 rounded-xl transition-all border ${isReaderSettingsOpen ? 'bg-red-600 border-red-600 text-white' : (readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200')}`}
+                        aria-label="পঠন সেটিংস"
+                        title="পঠন সেটিংস"
+                      >
+                        <Settings2 className="w-4 h-4" />
+                      </button>
+
+                      <AnimatePresence>
+                        {isReaderSettingsOpen && (
+                          <motion.div 
+                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
+                            animate={{ opacity: 1, scale: 1, y: 0 }}
+                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
+                            className={`absolute top-full right-0 mt-3 w-64 p-4 rounded-2xl border shadow-2xl z-50 ${readerTheme === 'dark' ? 'bg-[#1a1a1a] border-gray-800' : 'bg-white border-gray-200'}`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <div className="space-y-4 font-bengali text-left">
+                              <div>
+                                <span className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${readerTheme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>ফন্ট সাইজ</span>
+                                <div className="flex items-center justify-between bg-black/20 rounded-xl p-1">
+                                  <button onClick={() => setArticleTextSize('normal')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${articleTextSize === 'normal' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><Type className="w-3 h-3"/></button>
+                                  <button onClick={() => setArticleTextSize('large')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${articleTextSize === 'large' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><Type className="w-4 h-4"/></button>
+                                  <button onClick={() => setArticleTextSize('xlarge')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${articleTextSize === 'xlarge' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><Type className="w-5 h-5"/></button>
+                                </div>
+                              </div>
+                              <div>
+                                <span className={`text-[10px] font-black uppercase tracking-widest mb-2 block ${readerTheme === 'dark' ? 'text-gray-500' : 'text-gray-400'}`}>লাইন স্পেসিং</span>
+                                <div className="flex items-center justify-between bg-black/20 rounded-xl p-1">
+                                  <button onClick={() => setLineSpacing('tight')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${lineSpacing === 'tight' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><SlidersHorizontal className="w-4 h-4 rotate-90"/></button>
+                                  <button onClick={() => setLineSpacing('normal')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${lineSpacing === 'normal' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><SlidersHorizontal className="w-4 h-4 rotate-90 scale-y-125"/></button>
+                                  <button onClick={() => setLineSpacing('relaxed')} className={`flex-1 flex justify-center p-2 rounded-lg transition-all ${lineSpacing === 'relaxed' ? 'bg-red-600 text-white' : 'text-gray-500'}`}><SlidersHorizontal className="w-4 h-4 rotate-90 scale-y-150"/></button>
+                                </div>
+                              </div>
+                            </div>
+                          </motion.div>
+                        )}
+                      </AnimatePresence>
+                    </div>
+
+                  <button 
+                    onClick={() => handleSpeak(selectedArticle.title + ". " + selectedArticle.content)}
+                    className={`p-2 rounded-xl transition-all border ${isPlaying ? 'bg-red-600 border-red-600 text-white' : (readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200')}`}
+                  >
+                    {isPlaying ? <PauseCircle className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                  </button>
+
+                  <button 
+                    onClick={() => handleShare(selectedArticle)}
+                    className={`p-2 rounded-xl transition-all border ${readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    <Share2 className="w-4 h-4" />
+                  </button>
+
+                  <button 
+                    onClick={() => closeArticle()}
+                    className="p-2 bg-red-600 rounded-xl text-white hover:bg-red-700 transition-colors focus:ring-2 focus:ring-red-500"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              </div>
+              
+              <div className={`p-6 md:p-12 font-bengali relative z-20 transition-colors duration-500 ${getThemeBg()}`}>
+                <div className="flex items-center gap-3 text-[10px] md:text-xs text-gray-500 mb-6 uppercase tracking-[0.2em] font-bold">
+                  <span className="flex items-center gap-2 bg-red-600/10 text-red-500 px-2 py-0.5 rounded-full"><Clock size={12}/> {selectedArticle.time}</span>
+                  <span className="opacity-30">•</span>
+                  <span>{selectedArticle.category === 'national' ? 'জাতীয়' : selectedArticle.category === 'international' ? 'আন্তর্জাতিক' : selectedArticle.category}</span>
                 </div>
                 
-                <h1 className="text-3xl md:text-4xl font-bold leading-tight mb-6 text-gray-100">{selectedArticle.title}</h1>
+                <h1 className={`text-2xl md:text-5xl font-black leading-[1.2] mb-8 transition-colors duration-500 drop-shadow-sm ${readerTheme === 'dark' ? 'text-white' : (readerTheme === 'sepia' ? 'text-[#3E2723]' : 'text-gray-900')}`}>
+                  {selectedArticle.title}
+                </h1>
                 
-                <div className="prose prose-lg max-w-none text-gray-300">
-                  <div className="bg-gradient-to-r from-blue-900/10 to-purple-900/10 border border-blue-800/20 rounded-lg p-5 mb-6 relative overflow-hidden">
-                    <div className="absolute top-0 right-0 p-2 opacity-10">
-                      <Sparkles className="w-16 h-16 text-blue-400" />
+                <div className={`max-w-none transition-colors duration-500 ${readerTheme === 'dark' ? 'text-gray-300' : (readerTheme === 'sepia' ? 'text-[#433422]' : 'text-gray-800')}`}>
+                  <div className={`${readerTheme === 'dark' ? 'bg-white/5 border-white/5 shadow-none' : (readerTheme === 'sepia' ? 'bg-[#efe6d1] border-[#e0d6bc]' : 'bg-gray-50 border-gray-200')} border rounded-2xl p-6 mb-10 relative overflow-hidden transition-all text-left group`}>
+                    <div className="absolute top-0 right-0 p-4 opacity-5 group-hover:opacity-10 transition-opacity">
+                      <Sparkles className={`w-24 h-24 ${readerTheme === 'dark' ? 'text-white' : 'text-black'}`} />
                     </div>
-                    <h3 className="text-blue-400 font-bold mb-2 flex items-center gap-2 text-sm uppercase tracking-widest"><Sparkles className="w-4 h-4"/> সংবাদের এআই সারসংক্ষেপ</h3>
-                    <p className={`text-gray-300 font-medium italic relative z-10 ${getTextSizeClass()}`}>
+                    <h3 className={`${readerTheme === 'dark' ? 'text-red-500' : 'text-red-600'} font-black mb-3 flex items-center gap-2 text-[11px] uppercase tracking-[0.2em]`}><Sparkles className="w-4 h-4 animate-pulse"/> এআই সারসংক্ষেপ</h3>
+                    <p className={`font-bold italic relative z-10 transition-all ${getReaderStyles()} ${readerTheme === 'dark' ? 'text-white' : (readerTheme === 'sepia' ? 'text-[#3E2723]' : 'text-gray-900')}`}>
                       {selectedArticle.summary}
                     </p>
                   </div>
-                  <p className={`whitespace-pre-line text-gray-300 ${getTextSizeClass()}`}>
+                  <p className={`whitespace-pre-line text-left transition-all leading-relaxed ${getReaderStyles()}`}>
                     {selectedArticle.content}
                   </p>
+                </div>
+
+                {/* Source and Link */}
+                <div className="mt-12 pt-8 border-t border-white/5 flex flex-col sm:flex-row items-center justify-between gap-6">
+                   <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-red-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-red-600/20">
+                         <Newspaper size={24} />
+                      </div>
+                      <div>
+                         <p className="text-[10px] font-black text-gray-500 uppercase tracking-widest leading-none mb-1">প্রকাশকাল</p>
+                         <p className={`font-bold text-sm ${readerTheme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{selectedArticle.source} • {selectedArticle.time}</p>
+                      </div>
+                   </div>
+                   
+                   {selectedArticle.url && selectedArticle.url !== '#' && (
+                     <button 
+                        onClick={() => setEmbeddedUrl({ url: selectedArticle.url, name: selectedArticle.source })}
+                        className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-xl flex items-center justify-center gap-2 group"
+                     >
+                        মূল সংবাদটি পড়ুন <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
+                     </button>
+                   )}
                 </div>
 
                 {/* Related News Section */}
                 {liveNews.filter(n => n.id !== selectedArticle.id && n.category === selectedArticle.category).length > 0 && (
                   <div className="mt-12 pt-8 border-t border-gray-800">
-                    <h3 className="text-xl font-bold mb-6 text-white flex items-center gap-2 relative">
+                    <h3 className={`text-xl font-bold mb-6 flex items-center gap-2 relative ${readerTheme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
                        <span className="w-1.5 h-6 bg-red-600 rounded-full inline-block mr-1"></span>
                        সম্পর্কিত খবর
                     </h3>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      {liveNews.filter(n => n.id !== selectedArticle.id && n.category === selectedArticle.category).slice(0, 4).map(relatedNews => (
+                      {liveNews.filter(n => n.id !== selectedArticle.id && n.category === selectedArticle.category).slice(0, 4).map((relatedNews, idx) => (
                         <div 
-                          key={`related-${relatedNews.id}`} 
+                          key={`related-${relatedNews.id}-${idx}`} 
                           onClick={(e) => {
                             e.stopPropagation();
                             if ('speechSynthesis' in window) window.speechSynthesis.cancel();
@@ -1282,20 +1757,11 @@ export default function App() {
                             // Scroll modal to top
                             const modalContent = e.currentTarget.closest('.overflow-y-auto');
                             if (modalContent) modalContent.scrollTo({ top: 0, behavior: 'smooth' });
+                            setIsReaderSettingsOpen(false);
                           }}
-                          className="flex gap-4 bg-[#111] p-3 rounded-lg border border-gray-800 hover:border-gray-600 hover:shadow-lg hover:shadow-black/50 transition-all cursor-pointer group"
+                          className={`${readerTheme === 'dark' ? 'bg-[#111] border-gray-800 text-gray-200' : 'bg-white border-gray-200 text-gray-900'} flex gap-4 p-3 rounded-lg border hover:border-gray-600 hover:shadow-lg transition-all cursor-pointer group`}
                         >
-                          <div className="w-24 h-24 sm:h-20 shrink-0 rounded overflow-hidden relative border border-gray-800">
-                             <div className="absolute inset-0 bg-black/20 group-hover:bg-transparent transition-colors z-10"></div>
-                             <img 
-                               loading="lazy" 
-                               src={relatedNews.image} 
-                               alt={relatedNews.title} 
-                               referrerPolicy="no-referrer"
-                               onError={(e) => handleImageError(e, relatedNews.title, relatedNews.category)}
-                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" 
-                             />
-                          </div>
+                          {/* Image removed */}
                           <div className="flex flex-col flex-1 justify-between">
                             <h4 className="font-bold text-sm sm:text-base text-gray-200 group-hover:text-red-400 transition-colors line-clamp-2 md:line-clamp-3 leading-snug">{relatedNews.title}</h4>
                             <div className="mt-2 flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-widest font-bengali">
@@ -1368,26 +1834,8 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* AI Bot Component */}
-      <AIBot isOpen={isAIBotOpen} onClose={() => setIsAIBotOpen(false)} />
-
-      {/* AI Bot FAB */}
-      {!isAIBotOpen && (
-        <motion.button
-          initial={{ scale: 0 }}
-          animate={{ scale: 1 }}
-          whileHover={{ scale: 1.05 }}
-          whileTap={{ scale: 0.95 }}
-          onClick={() => setIsAIBotOpen(true)}
-          className="fixed bottom-32 right-4 sm:right-8 z-40 bg-red-600 hover:bg-red-700 text-white rounded-full p-4 shadow-[0_0_20px_rgba(220,38,38,0.4)] flex items-center gap-3 group transition-all"
-        >
-          <Bot className="w-6 h-6" />
-          <span className="font-bengali font-bold hidden group-hover:block transition-all">নিউজ হাব এআই</span>
-        </motion.button>
-      )}
-
       {/* Footer Status Bar */}
-      <footer className="bg-[#050505] border-t border-gray-800 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center text-[10px] text-gray-600 font-bold tracking-widest uppercase mt-auto">
+      <footer className="bg-[#050505] border-t border-gray-800 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center text-[10px] text-gray-600 font-bold tracking-widest uppercase mt-auto mb-4">
         <div className="flex gap-4 mb-3 md:mb-0">
           <span className="font-bengali">সংযুক্ত সংবাদপত্র: ৬৪টি</span>
           <span className="font-bengali">টিভি চ্যানেল: ২২টি</span>
@@ -1401,61 +1849,8 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Footer Navigation Bar */}
-      <footer className="fixed bottom-0 left-0 right-0 z-40 bg-[#0a0a0a]/95 backdrop-blur-md border-t border-gray-800/50 py-2 pb-safe-offset-2 lg:hidden">
-        <div className="max-w-md mx-auto px-6 flex justify-between items-center">
-          <button 
-            onClick={() => {
-              setActiveTab('home');
-              setSelectedCategory('all');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' && selectedCategory === 'all' ? 'text-red-500' : 'text-gray-500'}`}
-          >
-            <Home className="w-5 h-5" />
-            <span className="text-[10px] font-bold font-bengali">হোম</span>
-          </button>
-          
-          <button 
-            onClick={() => {
-              setActiveTab('home');
-              setSelectedCategory('national');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' && selectedCategory === 'national' ? 'text-red-500' : 'text-gray-500'}`}
-          >
-            <Newspaper className="w-5 h-5" />
-            <span className="text-[10px] font-bold font-bengali">জাতীয়</span>
-          </button>
-          
-          <button 
-            onClick={() => {
-              setActiveTab('home');
-              setSelectedCategory('international');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' && selectedCategory === 'international' ? 'text-red-500' : 'text-gray-500'}`}
-          >
-            <Globe className="w-5 h-5" />
-            <span className="text-[10px] font-bold font-bengali">আন্তর্জাতিক</span>
-          </button>
-          
-          <button 
-            onClick={() => {
-              setActiveTab('home');
-              setSelectedCategory('sports');
-              window.scrollTo({ top: 0, behavior: 'smooth' });
-            }}
-            className={`flex flex-col items-center gap-1 transition-colors ${activeTab === 'home' && selectedCategory === 'sports' ? 'text-red-500' : 'text-gray-500'}`}
-          >
-            <Trophy className="w-5 h-5" />
-            <span className="text-[10px] font-bold font-bengali">খেলা</span>
-          </button>
-        </div>
-      </footer>
-
       {/* Desktop Footer (Optional addition for completeness) */}
-      <footer className="hidden lg:block bg-[#070707] border-t border-gray-900 mt-20 py-12 pb-24">
+      <footer className="hidden lg:block bg-[#070707] border-t border-gray-900 mt-20 py-12 pb-12">
         <div className="max-w-7xl mx-auto px-4 md:px-6">
           <div className="grid grid-cols-1 md:grid-cols-4 gap-12">
             <div className="col-span-1 md:col-span-2">
@@ -1505,6 +1900,8 @@ export default function App() {
           </div>
         </div>
       </footer>
+
+      {/* Admin Panel Modal removed to use full page view */}
     </div>
   );
 }
