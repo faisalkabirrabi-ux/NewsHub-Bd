@@ -1,31 +1,45 @@
 const express = require("express");
-const mongoose = require("mongoose");
+const cors = require("cors");
 require("dotenv").config();
 
 const app = express();
 
-// Root route (important - না থাকলে error দেখাবে)
+// middleware
+app.use(cors());
+app.use(express.json());
+
+// Root route (health check)
 app.get("/", (req, res) => {
   res.send("Server is running ✅");
 });
 
-// Mongo connect (safe)
-if (process.env.MONGO_URI) {
-  mongoose.connect(process.env.MONGO_URI)
-    .then(() => console.log("MongoDB Connected"))
-    .catch(err => console.log("Mongo Error:", err));
-}
+// ===============================
+// 📰 NEWS API ROUTE (FIXED)
+// ===============================
+app.get("/api/news", async (req, res) => {
+  try {
+    const response = await fetch(
+      `https://newsapi.org/v2/top-headlines?country=bd&apiKey=${process.env.NEWS_API_KEY}`
+    );
 
-// PORT FIX (MOST IMPORTANT)
+    const data = await response.json();
+
+    if (!data.articles) {
+      return res.status(500).json({ error: "No news found" });
+    }
+
+    res.json(data.articles);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Server error fetching news" });
+  }
+});
+
+// ===============================
+// PORT SETUP (IMPORTANT FOR RENDER)
+// ===============================
 const PORT = process.env.PORT || 3000;
 
 app.listen(PORT, () => {
-  console.log("Running on port", PORT);
-});app.get("/api/news", (req, res) => {
-  res.json([
-    {
-      title: "Test News 1",
-      description: "This is sample news"
-    }
-  ]);
+  console.log(`Server running on port ${PORT}`);
 });
