@@ -1,20 +1,60 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Users, 
   Newspaper, 
   Eye, 
   TrendingUp,
   Clock,
-  ArrowUpRight
+  ArrowUpRight,
+  Activity,
+  MessageSquare
 } from 'lucide-react';
 import { motion } from 'motion/react';
+import { db } from '../../lib/firebase';
+import { collection, query, where, onSnapshot, getCountFromServer, orderBy, limit } from 'firebase/firestore';
 
 export const Dashboard: React.FC = () => {
+  const [activeUsersCount, setActiveUsersCount] = useState(0);
+  const [totalNews, setTotalNews] = useState(0);
+  const [totalComments, setTotalComments] = useState(0);
+  const [recentSessions, setRecentSessions] = useState<any[]>([]);
+
+  useEffect(() => {
+    // Real-time active users
+    const activeQuery = query(collection(db, 'sessions'), where('isOnline', '==', true));
+    const unsubscribeActive = onSnapshot(activeQuery, (snapshot) => {
+      setActiveUsersCount(snapshot.size);
+    }, (error) => {
+      console.error("Admin dashboard active users listener failed:", error);
+    });
+
+    // Total news count
+    const fetchStats = async () => {
+      const articlesSnap = await getCountFromServer(collection(db, 'articles'));
+      setTotalNews(articlesSnap.data().count);
+
+      const commentsSnap = await getCountFromServer(collection(db, 'comments'));
+      setTotalComments(commentsSnap.data().count);
+    };
+    fetchStats();
+
+    // Recent sessions
+    const sessionsQuery = query(collection(db, 'sessions'), orderBy('lastActive', 'desc'), limit(5));
+    const unsubscribeSessions = onSnapshot(sessionsQuery, (snapshot) => {
+      setRecentSessions(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() })));
+    });
+
+    return () => {
+      unsubscribeActive();
+      unsubscribeSessions();
+    };
+  }, []);
+
   const stats = [
-    { label: 'মোট খবর', value: '১,২৪০', icon: Newspaper, color: 'bg-blue-500', trend: '+১২%' },
-    { label: 'আজকের পাঠক', value: '৪৫,২০০', icon: Eye, color: 'bg-green-500', trend: '+১৮%' },
-    { label: 'নতুন ইউজার', value: '৮৫০', icon: Users, color: 'bg-purple-500', trend: '+৫%' },
-    { label: 'এনগেজমেন্ট', value: '২৪.৫%', icon: TrendingUp, color: 'bg-red-500', trend: '+৯%' },
+    { label: 'সক্রিয় ইউজার', value: activeUsersCount.toString(), icon: Activity, color: 'bg-green-500', trend: 'Live' },
+    { label: 'মোট খবর', value: totalNews.toString(), icon: Newspaper, color: 'bg-blue-500', trend: 'Total' },
+    { label: 'মোট মন্তব্য', value: totalComments.toString(), icon: MessageSquare, color: 'bg-purple-500', trend: 'User interaction' },
+    { label: 'এনগেজমেন্ট', value: '৮৫%', icon: TrendingUp, color: 'bg-red-500', trend: 'High' },
   ];
 
   return (
@@ -58,20 +98,30 @@ export const Dashboard: React.FC = () => {
           </div>
           
           <div className="space-y-6">
-            {[1, 2, 3, 4].map((item) => (
-              <div key={item} className="flex gap-4 items-start group">
-                <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center flex-shrink-0 border border-white/5">
-                  <Clock size={18} className="text-white/30" />
+            {recentSessions.map((session, i) => (
+              <div key={session.id} className="flex gap-4 items-start group">
+                <div className={`w-10 h-10 rounded-full bg-white/5 flex items-center justify-center flex-shrink-0 border border-white/5 ${session.isOnline ? 'border-green-500/50' : ''}`}>
+                  <Users size={18} className={session.isOnline ? 'text-green-500' : 'text-white/30'} />
                 </div>
                 <div className="flex-1 border-b border-white/5 pb-6 last:border-0">
-                  <p className="text-white/90 text-sm font-medium font-bengali leading-relaxed">
-                    <span className="text-red-500 font-bold">এডমিন</span> একটি নতুন খবর প্রকাশ করেছেন: 
-                    <span className="text-white/50 italic ml-1">"বাংলাদেশে বিনিয়োগ বাড়াতে চায় জাপান..."</span>
+                  <div className="flex justify-between items-start">
+                    <p className="text-white/90 text-sm font-medium font-bengali leading-relaxed">
+                      একজন <span className="text-red-500 font-bold">{session.userId === 'anonymous' ? 'অজানা ভিজিটর' : 'নিবন্ধিত ইউজার'}</span> অ্যাপ ব্যবহার করছেন
+                    </p>
+                    {session.isOnline && (
+                      <span className="flex h-2 w-2 rounded-full bg-green-500 animate-pulse"></span>
+                    )}
+                  </div>
+                  <p className="text-white/30 text-[10px] mt-1.5 uppercase tracking-widest font-bold">
+                    {session.deviceInfo?.split(') ')[0]?.split('(')[1] || 'Unknown Device'} • 
+                    {session.lastActive?.toDate().toLocaleTimeString('bn-BD')}
                   </p>
-                  <p className="text-white/30 text-[11px] mt-1.5 uppercase tracking-widest font-bold">৩ মিনিট আগে</p>
                 </div>
               </div>
             ))}
+            {recentSessions.length === 0 && (
+              <p className="text-white/20 text-center py-8 font-bengali">কোনো কার্যক্রম পাওয়া যায়নি</p>
+            )}
           </div>
         </div>
 

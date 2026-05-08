@@ -13,6 +13,50 @@ export default defineConfig(({mode}) => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'mask-icon.svg'],
+        workbox: {
+          globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
+          runtimeCaching: [
+            {
+              urlPattern: /^https:\/\/images\.unsplash\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'unsplash-images',
+                expiration: {
+                  maxEntries: 100,
+                  maxAgeSeconds: 60 * 60 * 24 * 30, // 30 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /^https:\/\/(www\.)?(prothomalo|thedailystar|dhakatribune|jugantor|ittefaq|samakal|somoynews|jamuna|channelionline|independent24)\.com\/.*/i,
+              handler: 'CacheFirst',
+              options: {
+                cacheName: 'news-source-images',
+                expiration: {
+                  maxEntries: 200,
+                  maxAgeSeconds: 60 * 60 * 24 * 7, // 7 days
+                },
+                cacheableResponse: {
+                  statuses: [0, 200],
+                },
+              },
+            },
+            {
+              urlPattern: /\/api\/news.*/i,
+              handler: 'NetworkFirst',
+              options: {
+                cacheName: 'api-news-cache',
+                expiration: {
+                  maxEntries: 50,
+                  maxAgeSeconds: 60 * 60 * 1, // 1 hour
+                },
+              },
+            },
+          ],
+        },
         manifest: {
           name: 'Ajker Protidin News',
           short_name: 'AjkerProtidin',

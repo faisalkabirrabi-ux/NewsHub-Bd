@@ -3,9 +3,98 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { createServer as createViteServer } from "vite";
 import axios from "axios";
+import Parser from "rss-parser";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// Initialize RSS Parser
+const parser = new Parser({
+  customFields: {
+    item: ['media:content', 'media:thumbnail']
+  }
+});
+
+// List of popular Bangladeshi RSS feeds
+const RSS_FEEDS = [
+  // Newspapers
+  { url: 'https://www.prothomalo.com/feed', source: 'Prothom Alo', category: 'national' },
+  { url: 'https://www.thedailystar.net/rss.xml', source: 'The Daily Star', category: 'national' },
+  { url: 'https://www.dhakatribune.com/rss.xml', source: 'Dhaka Tribune', category: 'national' },
+  { url: 'https://www.jugantor.com/feed', source: 'Jugantor', category: 'national' },
+  { url: 'https://www.ittefaq.com.bd/feed', source: 'Ittefaq', category: 'national' },
+  { url: 'https://samakal.com/feed', source: 'Samakal', category: 'national' },
+  
+  // TV Channels
+  { url: 'https://www.somoynews.tv/feed', source: 'Somoy TV', category: 'general' },
+  { url: 'https://www.jamuna.tv/feed', source: 'Jamuna TV', category: 'general' },
+  { url: 'https://www.channelionline.com/feed', source: 'Channel i', category: 'general' },
+  { url: 'https://www.independent24.com/feed', source: 'Independent TV', category: 'general' },
+  
+  // International
+  { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', source: 'NYT World', category: 'international' }
+];
+
+// In-memory cache for RSS news to prevent spamming feeds on every request
+let cachedRssNews: any[] = [];
+let lastFetchTime = 0;
+const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+
+async function fetchRssFeeds() {
+  const now = Date.now();
+  if (now - lastFetchTime < CACHE_DURATION && cachedRssNews.length > 0) {
+    return cachedRssNews;
+  }
+
+  const allNews: any[] = [];
+
+  for (const feedConfig of RSS_FEEDS) {
+    try {
+      const feed = await parser.parseURL(feedConfig.url);
+      
+      feed.items.forEach(item => {
+        // Extract an image if available - checking multiple common fields
+        let imageUrl = "https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=800&q=80"; // Default placeholder
+        
+        if (item.enclosure && item.enclosure.url) {
+          imageUrl = item.enclosure.url;
+        } else if (item['media:content'] && item['media:content']['$'] && item['media:content']['$'].url) {
+          imageUrl = item['media:content']['$'].url;
+        } else if (item['media:thumbnail'] && item['media:thumbnail']['$'] && item['media:thumbnail']['$'].url) {
+          imageUrl = item['media:thumbnail']['$'].url;
+        } else if (item.content) {
+          // Try to find an img tag in the content
+          const imgMatch = item.content.match(/<img[^>]+src="([^">]+)"/);
+          if (imgMatch && imgMatch[1]) {
+            imageUrl = imgMatch[1];
+          }
+        }
+
+        allNews.push({
+          id: Buffer.from(item.guid || item.link || item.title || '').toString('base64'),
+          title: item.title,
+          summary: (item.contentSnippet || item.content || '').substring(0, 150) + "...",
+          content: item.content || item.contentSnippet,
+          category: feedConfig.category,
+          source: feedConfig.source || feed.title,
+          url: item.link,
+          image: imageUrl,
+          time: item.pubDate ? new Date(item.pubDate).toLocaleTimeString() : "Recent",
+          timestamp: item.pubDate ? new Date(item.pubDate).getTime() : Date.now()
+        });
+      });
+    } catch (err) {
+      console.error(`Failed to fetch RSS from ${feedConfig.url}:`, (err as Error).message);
+    }
+  }
+
+  // Sort by newest, take top 50
+  allNews.sort((a, b) => b.timestamp - a.timestamp);
+  cachedRssNews = allNews.slice(0, 50);
+  lastFetchTime = now;
+  
+  return cachedRssNews;
+}
 
 async function startServer() {
   const app = express();
@@ -57,8 +146,16 @@ async function startServer() {
       }
     }
     
-    // Merge mock storage with external news
-    const combined = [...newsArticles, ...externalNews];
+    // Fetch and merge RSS news
+    let rssNews: any[] = [];
+    try {
+      rssNews = await fetchRssFeeds();
+    } catch (err) {
+      console.error("Failed to fetch RSS news during request");
+    }
+    
+    // Merge mock storage, external news, and RSS news
+    const combined = [...newsArticles, ...externalNews, ...rssNews];
     // Remove duplicates by ID
     const unique = Array.from(new Map(combined.map(item => [item.id, item])).values());
     

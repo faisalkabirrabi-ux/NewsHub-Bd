@@ -1,13 +1,60 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, Component } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2 } from 'lucide-react';
+import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2, MessageSquare, Wifi, WifiOff, User } from 'lucide-react';
 import { topNews, banglaPapers, englishPapers, tvChannels, internationalChannels, NewsArticle, MediaSource } from './data';
 import { fetchLiveNews } from './services/newsService';
 import NewsRow from './components/NewsRow';
+import FeedbackModal from './components/FeedbackModal';
+import ArticleComments from './components/ArticleComments';
+import AnalyticsTracker from './components/AnalyticsTracker';
+import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { auth, db } from './lib/firebase';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
-import { collection, addDoc, getDocs, query, orderBy, limit, serverTimestamp, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import { collection, addDoc, getDocs, query, where, orderBy, limit, serverTimestamp, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 import AdminApp from './admin/AdminApp';
+import { AIBot } from './components/AIBot';
+
+// Error Boundary for UI Self-Healing
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class ErrorBoundary extends Component<any, any> {
+  state = { hasError: false };
+
+  static getDerivedStateFromError(_: Error) {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+    console.error("UI Crash caught by self-healing boundary:", error, errorInfo);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex flex-col items-center justify-center bg-gray-50 p-6 text-center">
+          <div className="bg-white p-8 rounded-2xl shadow-xl max-w-md">
+            <RefreshCw className="mx-auto h-12 w-12 text-red-500 mb-4 animate-spin-slow" />
+            <h2 className="text-2xl font-bold text-gray-900 mb-2 font-bengali">দুঃখিত, কিছু সমস্যা হয়েছে</h2>
+            <p className="text-gray-600 mb-6 font-bengali">অ্যাপটি সঠিকভাবে লোড হতে পারছে না। আমরা এটি অটো-ফিক্স করার চেষ্টা করছি।</p>
+            <button 
+              onClick={() => window.location.reload()} 
+              className="w-full bg-red-600 text-white font-semibold py-3 px-6 rounded-xl hover:bg-red-700 transition-colors flex items-center justify-center gap-2 font-bengali"
+            >
+              <RefreshCw size={18} /> আবার চেষ্টা করুন
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return (this as any).props.children;
+  }
+}
 
 enum OperationType {
   CREATE = 'create',
@@ -56,23 +103,13 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Neutral news placeholders to avoid "AI" look
+// Neutral minimalist placeholders without AI people
 const categoryKeywords: Record<string, string[]> = {
-  national: ['https://images.unsplash.com/photo-1504711434969-e33886168f5c'],
-  international: ['https://images.unsplash.com/photo-1529107386315-e1a2ed48a620'],
-  sports: ['https://images.unsplash.com/photo-1508098682722-e99c43a406b2'],
-  tech: ['https://images.unsplash.com/photo-1518770660439-4636190af475'],
-  entertainment: ['https://images.unsplash.com/photo-1492684223066-81342ee5ff30'],
-  visa: ['https://images.unsplash.com/photo-1544016768-982d1554f0b9'],
-  default: ['https://images.unsplash.com/photo-1495020689067-958852a7765e']
+  default: ['data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjUwMCIgZmlsbD0iIzFBMUExQSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzMzMyIgZmlsbC1vcGFjaXR5PSIwLjUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk5vIEltYWdlIEF2YWlsYWJsZTwvdGV4dD48L3N2Zz4=']
 };
 
 const getVarietyImage = (title: string, category: string) => {
-  const images = categoryKeywords[category] || categoryKeywords.default;
-  const hash = title.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const baseImg = images[hash % images.length];
-  // Adding specific processing params to ensure variety and quality
-  return `${baseImg}?auto=format&fit=crop&q=80&w=1200&h=800&sig=${hash}`;
+  return categoryKeywords.default[0];
 };
 
 const isValidImageUrl = (url: string | null | undefined): boolean => {
@@ -80,20 +117,13 @@ const isValidImageUrl = (url: string | null | undefined): boolean => {
   const lower = url.toLowerCase();
   
   if (
-     lower.includes('logo') || 
-     lower.includes('favicon') || 
-     lower.includes('avatar') || 
-     lower.includes('banner') || 
-     lower.includes('placeholder') || 
-     lower.includes('blank') || 
      lower.includes('1x1') || 
+     lower.includes('pixel') ||
      lower.includes('ads') || 
      lower.includes('advertisement') || 
-     lower.includes('pixel') ||
-     lower.includes('icon') ||
-     lower.includes('default') ||
-     lower.includes('author') ||
-     lower.includes('profile')
+     lower.includes('blank') ||
+     (lower.includes('logo') && lower.length < 50) || // Only block if it's likely a small logo file
+     (lower.includes('favicon') && lower.length < 50)
   ) {
      return false;
   }
@@ -104,9 +134,7 @@ const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
   const target = e.currentTarget;
   if (target.getAttribute('data-failed-all')) return;
   
-  const title = target.getAttribute('data-title') || 'news';
-  const prompt = `Editorial news photography, Getty Images style, high quality, news about: ${title}`;
-  const fallbackUrl = `https://image.pollinations.ai/prompt/${encodeURIComponent(prompt)}?width=800&height=600&nologo=true`;
+  const fallbackUrl = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjUwMCIgZmlsbD0iIzFBMUExQSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzMzMyIgZmlsbC1vcGFjaXR5PSIwLjUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk5vIEltYWdlIEF2YWlsYWJsZTwvdGV4dD48L3N2Zz4=";
   
   target.setAttribute('data-failed-all', 'true');
   target.src = fallbackUrl;
@@ -129,7 +157,7 @@ const NewsCardSkeleton = () => (
   </div>
 );
 
-const getNoPhotoPlaceholder = () => "https://images.unsplash.com/photo-1495020689067-958852a7765e?auto=format&fit=crop&q=80&w=1200&h=800"; 
+const getNoPhotoPlaceholder = () => "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjUwMCIgZmlsbD0iIzFBMUExQSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzMzMyIgZmlsbC1vcGFjaXR5PSIwLjUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk5vIEltYWdlIEF2YWlsYWJsZTwvdGV4dD48L3N2Zz4="; 
 
 // Hero Banner Component
 const HeroBanner: React.FC<{ news: NewsArticle; onMoreInfo: (n: NewsArticle) => void; onPlay: (n: NewsArticle) => void; isPlaying?: boolean }> = ({ news, onMoreInfo, onPlay, isPlaying }) => (
@@ -155,11 +183,10 @@ const HeroBanner: React.FC<{ news: NewsArticle; onMoreInfo: (n: NewsArticle) => 
         transition={{ delay: 0.2 }}
         className="flex items-center gap-2"
       >
-        <span className="bg-red-600 text-white text-[10px] md:text-xs font-black px-2 py-1 rounded shadow-xl uppercase tracking-widest">
-          TOP NEWS
-        </span>
-        <span className="text-white/80 text-xs md:text-sm font-bold uppercase tracking-widest">
+        <span className="text-white/80 text-xs md:text-sm font-bold uppercase tracking-widest flex items-center gap-2">
           {news.source} • {news.time}
+          <span className="hidden sm:inline w-1 h-1 bg-white/30 rounded-full"></span>
+          <span className="hidden sm:inline text-white/50 text-[10px]">{calculateReadTimeBengali(news.title, news.content || news.summary)}</span>
         </span>
       </motion.div>
       
@@ -255,6 +282,8 @@ const NewsCard: React.FC<{
       <div className="flex items-center gap-2 text-[11px] text-gray-500 font-bold uppercase tracking-wider">
          <span className="w-1.5 h-1.5 bg-red-600 rounded-full animate-pulse"></span>
          <span>{news.time}</span>
+         <span className="w-1 h-1 bg-gray-700 rounded-full"></span>
+         <span className="text-[10px] opacity-80">{calculateReadTimeBengali(news.title, news.summary)}</span>
       </div>
       
       <h3 className="text-base md:text-lg font-bold font-bengali text-white line-clamp-2 leading-relaxed group-hover:text-red-500 transition-colors">
@@ -284,7 +313,20 @@ const NewsCard: React.FC<{
 );
 
 // Administrative features moved to AdminApp
+const convertToBengaliDigit = (num: number) => {
+  const digits: { [key: string]: string } = {
+    '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
+    '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
+  };
+  return num.toString().split('').map(d => digits[d] || d).join('');
+};
 
+const calculateReadTimeBengali = (title: string, content: string) => {
+  const text = title + " " + (content || "");
+  const wordCount = text.trim().split(/\s+/).length;
+  const readTimeMinutes = Math.max(1, Math.ceil(wordCount / 250));
+  return `${convertToBengaliDigit(readTimeMinutes)} মিনিট পড়ার সময়`;
+};
 
 const categoryStyles: Record<string, { accent: string, text: string, bg: string, gradient: string }> = {
   national: { 
@@ -343,7 +385,10 @@ const categoryStyles: Record<string, { accent: string, text: string, bg: string,
   }
 };
 
-type Tab = 'home' | 'national' | 'international' | 'sports' | 'tech' | 'entertainment' | 'visa' | 'photocards' | 'saved' | 'bangla' | 'english' | 'tv' | 'intl_tv';
+type Tab = 'home' | 'national' | 'international' | 'sports' | 'tech' | 'entertainment' | 'visa' | 'photocards' | 'saved' | 'bangla' | 'english' | 'tv' | 'intl_tv' | 'ai';
+
+const rssCache = new Map<string, { data: any, timestamp: number }>();
+const CACHE_DURATION_MS = 5 * 60 * 1000; // 5 minutes
 
 // Animated Bangladesh Flag Component
 const BDFlag = () => (
@@ -373,10 +418,12 @@ export default function App() {
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('home');
   const [selectedArticle, setSelectedArticle] = useState<NewsArticle | null>(null);
-  const [embeddedUrl, setEmbeddedUrl] = useState<{ url: string; name: string } | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [savedArticles, setSavedArticles] = useState<string[]>([]);
+  const [savedArticles, setSavedArticles] = useState<string[]>(() => {
+    const saved = localStorage.getItem('savedArticles');
+    return saved ? JSON.parse(saved) : [];
+  });
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTickerIndex, setCurrentTickerIndex] = useState(0);
@@ -396,10 +443,18 @@ export default function App() {
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   
   // Auth & Admin State
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<any | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [isAdminPanelOpen, setIsAdminPanelOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
+  const [isFeedbackModalOpen, setIsFeedbackModalOpen] = useState(false);
+  const [activeUsersCount, setActiveUsersCount] = useState(0);
+  const isOnline = useOnlineStatus();
+  
+  // Persist saved articles
+  useEffect(() => {
+    localStorage.setItem('savedArticles', JSON.stringify(savedArticles));
+  }, [savedArticles]);
   
   // Firestore News
   const [dbNews, setDbNews] = useState<NewsArticle[]>([]);
@@ -417,6 +472,25 @@ export default function App() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Real-time active users for admin
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    // Filter sessions active in the last 2 minutes
+    const q = query(
+      collection(db, 'sessions'),
+      where('isOnline', '==', true)
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      setActiveUsersCount(snapshot.size);
+    }, (error) => {
+      console.error("Sessions active count listener failed:", error);
+    });
+
+    return () => unsubscribe();
+  }, [isAdmin]);
 
   // Firestore News Listener
   useEffect(() => {
@@ -467,14 +541,6 @@ export default function App() {
     if (days === 1) return '১ দিন আগে';
     if (days < 7) return `${convertToBengaliDigit(days)} দিন আগে`;
     return 'পুরাতন খবর';
-  };
-
-  const convertToBengaliDigit = (num: number) => {
-    const digits: { [key: string]: string } = {
-      '0': '০', '1': '১', '2': '২', '3': '৩', '4': '৪',
-      '5': '৫', '6': '৬', '7': '৭', '8': '৮', '9': '৯'
-    };
-    return num.toString().split('').map(d => digits[d] || d).join('');
   };
 
   const dynamicCategories = React.useMemo(() => {
@@ -596,13 +662,12 @@ export default function App() {
         { url: 'https://news.google.com/rss/headlines/section/topic/SPORTS?hl=bn&gl=BD&ceid=BD:bn', cat: 'sports' },
         { url: 'https://news.google.com/rss/headlines/section/topic/TECHNOLOGY?hl=bn&gl=BD&ceid=BD:bn', cat: 'tech' },
         { url: 'https://news.google.com/rss/headlines/section/topic/ENTERTAINMENT?hl=bn&gl=BD&ceid=BD:bn', cat: 'entertainment' },
-        { url: 'https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en', cat: 'english' },
+        { url: 'https://news.google.com/rss/search?q=ভিসা+পাসপোর্ট+ইমিগ্রেশন&hl=bn&gl=BD&ceid=BD:bn', cat: 'visa' },
         // Top Newspapers
         { url: 'https://www.prothomalo.com/feed', cat: 'national' },
         { url: 'https://www.ittefaq.com.bd/rss.xml', cat: 'national' },
         { url: 'https://www.jugantor.com/rss.xml', cat: 'national' },
         { url: 'https://kalerkantho.com/rss.xml', cat: 'national' },
-        { url: 'https://www.thedailystar.net/rss.xml', cat: 'english' },
         { url: 'https://dailyinqilab.com/rss/rss.xml', cat: 'national' },
         { url: 'https://www.bd-pratidin.com/rss.xml', cat: 'national' },
         { url: 'https://www.dhakapost.com/rss', cat: 'national' },
@@ -625,8 +690,19 @@ export default function App() {
       // Try dynamic News API fetch first (GNews)
       const liveNewsPromise = async () => {
         try {
-           const items = await fetchLiveNews('all');
-           return items.map(item => ({...item, isTopSource: true}));
+           const itemsBn = await fetchLiveNews('bd');
+           const itemsEn = await fetchLiveNews('english');
+           const items = [...itemsBn, ...itemsEn];
+           return items.map(item => {
+             const hasTimestamp = item.timestamp && !isNaN(item.timestamp);
+             const ts = hasTimestamp ? item.timestamp! : Date.now();
+             return {
+               ...item, 
+               isTopSource: true,
+               timestamp: ts,
+               time: item.time || getRelativeTimeBengali(ts)
+             };
+           });
         } catch (e) {
            console.warn('Live API fetch failed', e);
            return [];
@@ -648,9 +724,25 @@ export default function App() {
 
       const ghPromises = ghSources.map(async (ghUrl) => {
         try {
-          const ghRes = await fetch(`${ghUrl}?nocache=${Date.now()}-${Math.random()}`); 
-          if (ghRes.ok) {
-            const ghData = await ghRes.json();
+          const cacheKey = ghUrl;
+          let ghData;
+
+          if (rssCache.has(cacheKey)) {
+            const cached = rssCache.get(cacheKey)!;
+            if (Date.now() - cached.timestamp < CACHE_DURATION_MS) {
+              ghData = cached.data;
+            }
+          }
+
+          if (!ghData) {
+            const ghRes = await fetch(`${ghUrl}?nocache=${Date.now()}-${Math.random()}`); 
+            if (ghRes.ok) {
+              ghData = await ghRes.json();
+              rssCache.set(cacheKey, { data: ghData, timestamp: Date.now() });
+            }
+          }
+
+          if (ghData) {
             console.log(`Successfully fetched from ${ghUrl}`, ghData);
             
             let ghMappedNews: NewsArticle[] = [];
@@ -659,7 +751,7 @@ export default function App() {
               ghMappedNews = ghData.map((item: any, i: number) => {
                 const cat = (item.category || item.news_category || 'national').toLowerCase();
                 const itemTimeStr = item.time || item.date || item.pubDate || '';
-                let itemTimestamp = Date.now() - (6 * 60 * 60 * 1000); 
+                let itemTimestamp = Date.now(); 
                 
                 if (itemTimeStr) {
                   const parsed = new Date(itemTimeStr).getTime();
@@ -691,7 +783,7 @@ export default function App() {
                   const cat = key.toLowerCase();
                   const mapped = items.map((item: any, i: number) => {
                     const itemTimeStr = item.time || item.date || item.pubDate || '';
-                    let itemTimestamp = Date.now() - (6 * 60 * 60 * 1000);
+                    let itemTimestamp = Date.now();
                     
                     if (itemTimeStr) {
                       const parsed = new Date(itemTimeStr).getTime();
@@ -708,7 +800,7 @@ export default function App() {
                       title: item.title || item.news_title || 'শিরোনাম নেই',
                       summary: item.summary || item.description || 'সারসংক্ষেপ নেই',
                       content: item.content || item.summary || '',
-                      source: item.source || (cat === 'bangla' ? 'বিবিসি বাংলা' : item.source || 'গিটহাব'),
+                      source: item.source || (cat === 'bangla' ? 'সংবাদ মাধ্যম' : 'গিটহাব'),
                       time: getRelativeTimeBengali(itemTimestamp),
                       image: finalImage,
                       category: cat as any,
@@ -732,12 +824,28 @@ export default function App() {
 
       const rssPromises = categories.map(async (feed) => {
         try {
-          const cacheBuster = `t=${Date.now()}`;
-          const finalUrl = feed.url.includes('?') ? `${feed.url}&${cacheBuster}` : `${feed.url}?${cacheBuster}`;
-          const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(finalUrl)}`);
-          const data = await res.json();
+          let data;
+          const cacheKey = feed.url;
+
+          if (rssCache.has(cacheKey)) {
+            const cached = rssCache.get(cacheKey)!;
+            if (Date.now() - cached.timestamp < CACHE_DURATION_MS) {
+              data = cached.data;
+            }
+          }
+
+          if (!data) {
+            const cacheBuster = `t=${Date.now()}`;
+            const finalUrl = feed.url.includes('?') ? `${feed.url}&${cacheBuster}` : `${feed.url}?${cacheBuster}`;
+            const res = await fetch(`https://api.rss2json.com/v1/api.json?rss_url=${encodeURIComponent(finalUrl)}`);
+            data = await res.json();
+            
+            if (data && data.status === 'ok') {
+               rssCache.set(cacheKey, { data, timestamp: Date.now() });
+            }
+          }
           
-          if (data.status === 'ok') {
+          if (data && data.status === 'ok') {
              return data.items.map((item: any, i: number) => {
                let sourceStr = item.title.includes(' - ') ? item.title.split(' - ').pop() : (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
                if (sourceStr && sourceStr.toLowerCase().includes('google news')) sourceStr = (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
@@ -759,7 +867,10 @@ export default function App() {
                  }
                }
 
-               const itemTimestamp = new Date(item.pubDate).getTime();
+               let itemTimestamp = new Date(item.pubDate).getTime();
+               if (isNaN(itemTimestamp) || itemTimestamp <= 0) {
+                 itemTimestamp = Date.now();
+               }
 
                let finalImage = originalImage;
                if (!isValidImageUrl(finalImage)) {
@@ -800,14 +911,14 @@ export default function App() {
 
         setLiveNews(prev => {
             const now = Date.now();
-            const twelveHoursAgo = now - (12 * 60 * 60 * 1000); // 12 hours in ms
+            const fortyEightHoursAgo = now - (48 * 60 * 60 * 1000); 
             
             const combined = [...deduplicated, ...prev];
             const unique = new Map();
             
             combined.forEach(n => {
-               // Filter out news older than 12 hours
-               if (n.timestamp && n.timestamp < twelveHoursAgo) return;
+               // Filter out news older than 48 hours
+               if (n.timestamp && n.timestamp < fortyEightHoursAgo) return;
 
                // Robust deduplication key: title without source suffix
                const titleKey = n.title.split(' - ')[0].trim().toLowerCase()
@@ -1161,21 +1272,23 @@ export default function App() {
     show: { y: 0, opacity: 1, transition: { type: 'spring', stiffness: 100 } }
   };
 
-  const NavButtons = () => {
-    const navItems: {id: Tab, label: string, icon: any}[] = [
-      {id: 'home', label: 'হোম', icon: Home},
-      {id: 'bangla', label: 'পত্রিকা', icon: Newspaper},
-      {id: 'tv', label: 'লাইভ টিভি', icon: Tv},
-      {id: 'national', label: 'বাংলাদেশ', icon: MapPin},
-      {id: 'international', label: 'আন্তর্জাতিক', icon: Globe},
-      {id: 'sports', label: 'খেলাধুলা', icon: Trophy},
-      {id: 'tech', label: 'প্রযুক্তি', icon: Sparkles},
-      {id: 'entertainment', label: 'বিনোদন', icon: Tv},
-      {id: 'visa', label: 'ভিসা', icon: ExternalLink},
-      {id: 'saved', label: 'সেভ করা', icon: Bookmark},
-      {id: 'english', label: 'English', icon: Type},
-    ];
+  const navItems: {id: Tab, label: string, icon: any}[] = useMemo(() => [
+    {id: 'home', label: 'হোম', icon: Home},
+    {id: 'bangla', label: 'পত্রিকা', icon: Newspaper},
+    {id: 'tv', label: 'লাইভ টিভি', icon: Tv},
+    {id: 'intl_tv', label: 'আন্তর্জাতিক', icon: Globe},
+    {id: 'english', label: 'English', icon: Type},
+    {id: 'national', label: 'বাংলাদেশ', icon: MapPin},
+    {id: 'international', label: 'বিশ্ব', icon: Globe},
+    {id: 'sports', label: 'খেলাধুলা', icon: Trophy},
+    {id: 'tech', label: 'প্রযুক্তি', icon: Sparkles},
+    {id: 'entertainment', label: 'বিনোদন', icon: Tv},
+    {id: 'visa', label: 'ভিসা', icon: ExternalLink},
+    {id: 'saved', label: 'সেভ করা', icon: Bookmark},
+    {id: 'ai', label: 'এআই বট', icon: Bot},
+  ], []);
 
+  const renderNavButtons = () => {
     return (
       <div className="flex items-center gap-2 overflow-x-auto pb-1 -mx-4 px-4 md:mx-0 md:px-0 hide-scrollbar scroll-smooth">
         {navItems.map((item) => (
@@ -1218,7 +1331,9 @@ export default function App() {
   }
 
   return (
-    <div className={`min-h-screen font-bengali transition-colors duration-500 overflow-x-hidden ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-gray-50 text-gray-900'}`}>
+    <ErrorBoundary>
+      <div className={`min-h-screen font-bengali transition-colors duration-500 overflow-x-hidden ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-gray-50 text-gray-900'}`}>
+      <AnalyticsTracker />
       {/* Top Utility Bar */}
       <div className={`px-4 md:px-8 py-2 flex justify-between items-center text-[10px] sm:text-xs font-bengali transition-all border-b ${isDarkMode ? 'bg-[#050505] border-white/5 text-gray-500' : 'bg-gray-100 border-gray-200 text-gray-600 shadow-sm'}`}>
         <div className="flex items-center gap-3 md:gap-6 overflow-x-auto scrollbar-hide shrink-0">
@@ -1268,9 +1383,14 @@ export default function App() {
               {isAdmin && (
                 <button 
                   onClick={() => setIsAdminPanelOpen(true)}
-                  className="p-2 md:p-2.5 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-lg shadow-red-600/20"
+                  className="p-2 md:p-2.5 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-lg shadow-red-600/20 relative"
                 >
                   <ShieldCheck size={20} />
+                  {activeUsersCount > 0 && (
+                    <span className="absolute -top-1 -right-1 bg-white text-red-600 text-[8px] font-black px-1 rounded-full border border-red-600 animate-pulse">
+                      {activeUsersCount}
+                    </span>
+                  )}
                 </button>
               )}
 
@@ -1318,7 +1438,7 @@ export default function App() {
           </div>
 
           <div className="hidden md:block w-full">
-             <NavButtons />
+             {renderNavButtons()}
           </div>
         </div>
       </header>
@@ -1326,12 +1446,37 @@ export default function App() {
       {/* Persistent Horizontal Navigation for Mobile */}
       <div className={`md:hidden sticky top-[68px] z-[80] backdrop-blur-xl border-b transition-all ${isDarkMode ? 'bg-[#0a0a0a]/95 border-white/5' : 'bg-white/98 border-gray-100 shadow-sm'}`}>
         <div className="px-4 py-2.5 overflow-hidden">
-          <NavButtons />
+          {renderNavButtons()}
         </div>
       </div>
 
 
       {/* Breaking Ticker */}
+      {/* Mobile Menu Overlay */}
+      <AnimatePresence>
+        {isMobileMenuOpen && (
+          <motion.div 
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -20 }}
+            className={`md:hidden fixed inset-x-0 top-[68px] z-[90] p-4 border-b ${isDarkMode ? 'bg-[#0a0a0a] border-white/5' : 'bg-white border-gray-200'} shadow-xl flex flex-col gap-4`}
+          >
+             <button onClick={() => { setIsDarkMode(!isDarkMode); setIsMobileMenuOpen(false); }} className={`flex items-center gap-3 p-3 rounded-xl border ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-gray-50 border-gray-200 text-gray-900'}`}>
+                {isDarkMode ? <Sun size={18} /> : <Moon size={18} />} 
+                <span className="font-bengali font-bold">{isDarkMode ? 'লাইট মোড' : 'ডার্ক মোড'}</span>
+             </button>
+             <button onClick={() => { setIsFeedbackModalOpen(true); setIsMobileMenuOpen(false); }} className={`flex items-center gap-3 p-3 rounded-xl border ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-gray-50 border-gray-200 text-gray-900'}`}>
+                <MessageSquare size={18} />
+                <span className="font-bengali font-bold">মতামত দিন</span>
+             </button>
+             <button onClick={() => { alert('Privacy Policy: We respect your privacy. No personal data is stored without consent.'); setIsMobileMenuOpen(false); }} className={`flex items-center gap-3 p-3 rounded-xl border ${isDarkMode ? 'bg-white/5 border-white/10 text-white' : 'bg-gray-50 border-gray-200 text-gray-900'}`}>
+                <ShieldCheck size={18} />
+                <span className="font-bengali font-bold">প্রাইভেসি পলিসি</span>
+             </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {liveNews.length > 0 && (
         <div 
           className={`border-b py-2 px-4 md:px-8 flex items-center overflow-hidden transition-colors ${isDarkMode ? 'bg-red-600/5 border-white/5' : 'bg-red-50 border-gray-200'}`}
@@ -1448,30 +1593,46 @@ export default function App() {
                   <div className="flex items-center justify-between mb-8">
                     <h3 className="text-2xl md:text-4xl font-black font-bengali text-white flex items-center gap-4">
                       <span className="w-2 h-10 bg-red-600 rounded-full"></span>
-                      {activeTab === 'home' ? (selectedCategory === 'all' ? 'শীর্ষ সংবাদ' : selectedCategory) : (activeTab === 'national' ? 'বাংলাদেশ' : activeTab === 'international' ? 'আন্তর্জাতিক' : activeTab === 'sports' ? 'খেলাধুলা' : activeTab === 'tech' ? 'প্রযুক্তি' : activeTab === 'entertainment' ? 'বিনোদন' : activeTab === 'visa' ? 'ভিসা ও তথ্য' : activeTab === 'saved' ? 'আপনার নির্বাচিত সংবাদ' : activeTab === 'english' ? 'English News' : 'পত্রিকা')}
+                      {activeTab === 'home' ? (selectedCategory === 'all' ? 'প্রধান সংবাদ' : selectedCategory) : (activeTab === 'national' ? 'বাংলাদেশ' : activeTab === 'international' ? 'আন্তর্জাতিক' : activeTab === 'sports' ? 'খেলাধুলা' : activeTab === 'tech' ? 'প্রযুক্তি' : activeTab === 'entertainment' ? 'বিনোদন' : activeTab === 'visa' ? 'ভিসা ও তথ্য' : activeTab === 'saved' ? 'আপনার নির্বাচিত সংবাদ' : activeTab === 'english' ? 'English News' : 'পত্রিকা')}
                     </h3>
                   </div>
 
-                  <motion.div 
-                    variants={containerVariants}
-                    initial="hidden"
-                    animate="show"
-                    className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8"
-                  >
-                    {displayNews.map((news) => (
-                      <NewsCard 
-                         key={news.id} 
-                         news={news} 
-                         onNewsClick={setSelectedArticle} 
-                         onShareClick={handleShare}
-                         onDownloadClick={handleDownloadImage}
-                         isSaved={savedArticles.includes(news.id)}
-                         onToggleBookmark={toggleBookmark}
-                      />
-                    ))}
-                  </motion.div>
+                  {displayNews.length > 0 ? (
+                    <motion.div 
+                      variants={containerVariants}
+                      initial="hidden"
+                      animate="show"
+                      className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8"
+                    >
+                      {displayNews.map((news) => (
+                        <NewsCard 
+                           key={news.id} 
+                           news={news} 
+                           onNewsClick={setSelectedArticle} 
+                           onShareClick={handleShare}
+                           onDownloadClick={handleDownloadImage}
+                           isSaved={savedArticles.includes(news.id)}
+                           onToggleBookmark={toggleBookmark}
+                        />
+                      ))}
+                    </motion.div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center py-32 text-center">
+                      <div className="w-20 h-20 mb-6 rounded-full bg-gray-100 dark:bg-white/5 flex items-center justify-center shadow-inner">
+                        <Search className="w-10 h-10 text-gray-400 dark:text-white/30" />
+                      </div>
+                      <h3 className={`text-2xl font-bold font-bengali ${isDarkMode ? 'text-white' : 'text-gray-900'} mb-3`}>কোনো খবর পাওয়া যায়নি</h3>
+                      <p className={`font-bengali text-base ${isDarkMode ? 'text-white/60' : 'text-gray-500'}`}>আপনার অনুসন্ধানের সাথে মিলে এমন কোনো খবর পাওয়া যায়নি।</p>
+                    </div>
+                  )}
                 </>
              )}
+          </div>
+        )}
+        
+        {activeTab === 'ai' && (
+          <div className="pt-8">
+            <AIBot />
           </div>
         )}
 
@@ -1558,11 +1719,7 @@ export default function App() {
                   whileTap={{ scale: 0.98 }}
                   aria-label={`${source.name} ওপেন করুন`}
                   onClick={() => {
-                    if (activeTab === 'intl_tv') {
-                      window.open(source.url, '_blank');
-                    } else {
-                      setEmbeddedUrl({ url: source.url, name: source.name });
-                    }
+                    window.open(source.url, '_blank');
                   }}
                   className="bg-[#141414] border border-white/5 rounded-2xl p-5 flex flex-col items-center justify-center gap-4 hover:bg-[#1a1a1a] hover:border-blue-600/30 transition-all group aspect-square relative"
                 >
@@ -1694,12 +1851,28 @@ export default function App() {
                 <div className="flex items-center gap-3 text-[10px] md:text-xs text-gray-500 mb-6 uppercase tracking-[0.2em] font-bold">
                   <span className="flex items-center gap-2 bg-red-600/10 text-red-500 px-2 py-0.5 rounded-full"><Clock size={12}/> {selectedArticle.time}</span>
                   <span className="opacity-30">•</span>
+                  <span className="flex items-center gap-2 bg-blue-600/10 text-blue-500 px-2 py-0.5 rounded-full"><User size={12}/> {selectedArticle.author || 'By Staff Writer'}</span>
+                  <span className="opacity-30">•</span>
+                  <span className="flex items-center gap-2 bg-emerald-600/10 text-emerald-500 px-2 py-0.5 rounded-full"><Clock size={12}/> {calculateReadTimeBengali(selectedArticle.title, selectedArticle.content)}</span>
+                  <span className="opacity-30">•</span>
                   <span>{selectedArticle.category === 'national' ? 'জাতীয়' : selectedArticle.category === 'international' ? 'আন্তর্জাতিক' : selectedArticle.category}</span>
                 </div>
                 
                 <h1 className={`text-2xl md:text-5xl font-black leading-[1.2] mb-8 transition-colors duration-500 drop-shadow-sm ${readerTheme === 'dark' ? 'text-white' : (readerTheme === 'sepia' ? 'text-[#3E2723]' : 'text-gray-900')}`}>
                   {selectedArticle.title}
                 </h1>
+
+                {selectedArticle.image && (
+                  <div className="w-full mb-8 rounded-2xl overflow-hidden shadow-2xl relative group">
+                    <img 
+                      src={selectedArticle.image} 
+                      alt={selectedArticle.title} 
+                      onError={handleImageError}
+                      className="w-full h-auto object-cover transition-transform duration-700 group-hover:scale-[1.02]"
+                    />
+                    <div className="absolute inset-0 bg-gradient-to-t from-black/20 to-transparent"></div>
+                  </div>
+                )}
                 
                 <div className={`max-w-none transition-colors duration-500 ${readerTheme === 'dark' ? 'text-gray-300' : (readerTheme === 'sepia' ? 'text-[#433422]' : 'text-gray-800')}`}>
                   <div className={`${readerTheme === 'dark' ? 'bg-white/5 border-white/5 shadow-none' : (readerTheme === 'sepia' ? 'bg-[#efe6d1] border-[#e0d6bc]' : 'bg-gray-50 border-gray-200')} border rounded-2xl p-6 mb-10 relative overflow-hidden transition-all text-left group`}>
@@ -1730,13 +1903,19 @@ export default function App() {
                    
                    {selectedArticle.url && selectedArticle.url !== '#' && (
                      <button 
-                        onClick={() => setEmbeddedUrl({ url: selectedArticle.url, name: selectedArticle.source })}
+                        onClick={() => window.open(selectedArticle.url, '_blank')}
                         className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-xl flex items-center justify-center gap-2 group"
                      >
                         মূল সংবাদটি পড়ুন <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                      </button>
                    )}
                 </div>
+
+                {/* Article Comments */}
+                <ArticleComments 
+                  articleId={selectedArticle.id} 
+                  articleTitle={selectedArticle.title} 
+                />
 
                 {/* Related News Section */}
                 {liveNews.filter(n => n.id !== selectedArticle.id && n.category === selectedArticle.category).length > 0 && (
@@ -1759,11 +1938,18 @@ export default function App() {
                             if (modalContent) modalContent.scrollTo({ top: 0, behavior: 'smooth' });
                             setIsReaderSettingsOpen(false);
                           }}
-                          className={`${readerTheme === 'dark' ? 'bg-[#111] border-gray-800 text-gray-200' : 'bg-white border-gray-200 text-gray-900'} flex gap-4 p-3 rounded-lg border hover:border-gray-600 hover:shadow-lg transition-all cursor-pointer group`}
+                          className={`${readerTheme === 'dark' ? 'bg-[#111] border-gray-800 text-gray-200' : 'bg-white border-gray-200 text-gray-900'} flex gap-4 p-3 rounded-2xl border hover:border-gray-600 hover:shadow-lg transition-all cursor-pointer group h-full overflow-hidden`}
                         >
-                          {/* Image removed */}
-                          <div className="flex flex-col flex-1 justify-between">
-                            <h4 className="font-bold text-sm sm:text-base text-gray-200 group-hover:text-red-400 transition-colors line-clamp-2 md:line-clamp-3 leading-snug">{relatedNews.title}</h4>
+                          <div className="w-24 h-24 rounded-xl overflow-hidden flex-shrink-0 bg-gray-900">
+                             <img 
+                               src={relatedNews.image} 
+                               alt={relatedNews.title} 
+                               className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                               onError={handleImageError}
+                             />
+                          </div>
+                          <div className="flex flex-col flex-1 justify-between py-1">
+                            <h4 className="font-bold text-sm text-gray-200 group-hover:text-red-400 transition-colors line-clamp-3 leading-snug">{relatedNews.title}</h4>
                             <div className="mt-2 flex items-center justify-between text-[10px] text-gray-500 uppercase tracking-widest font-bengali">
                                <span className="font-bold">{relatedNews.source}</span>
                                <span>{relatedNews.time}</span>
@@ -1780,69 +1966,34 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* External Embedded Browser Modal */}
-      <AnimatePresence>
-        {embeddedUrl && (
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 bg-[#050505] z-50 flex flex-col"
-          >
-            <div className="bg-[#0f0f0f] border-b border-gray-800 px-4 py-3 flex items-center justify-between shadow-sm z-10">
-              <div className="flex items-center gap-3">
-                <button 
-                  onClick={() => setEmbeddedUrl(null)}
-                  className="p-2 text-gray-400 hover:text-white hover:bg-white/10 rounded transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-                <div>
-                  <h3 className="font-bold text-gray-200 font-bengali text-lg leading-none">{embeddedUrl.name}</h3>
-                  <a href={embeddedUrl.url} target="_blank" rel="noreferrer" className="text-[10px] text-gray-500 hover:text-red-400 flex items-center gap-1 mt-1">
-                    {embeddedUrl.url} <ArrowUpRight className="w-3 h-3" />
-                  </a>
-                </div>
-              </div>
-              <a 
-                href={embeddedUrl.url} 
-                target="_blank" 
-                rel="noreferrer"
-                className="flex items-center gap-2 bg-red-600 text-white px-4 py-1.5 rounded text-xs font-bold uppercase tracking-wider hover:bg-red-700 transition"
-              >
-                <ArrowUpRight className="w-4 h-4" />
-                <span>Open</span>
-              </a>
-            </div>
-            
-            <div className="flex-1 bg-[#111] relative">
-              <div className="absolute inset-0 flex flex-col items-center justify-center p-8 text-center text-gray-600 z-0">
-                <Globe className="w-16 h-16 mb-4 text-gray-800" />
-                <h3 className="text-xl font-bold font-bengali mb-2 text-gray-400">Loading...</h3>
-                <p className="font-bengali max-w-md text-sm">
-                  যদি ওয়েবসাইটটি না দেখায়, তবে সিকিউরিটি পলিসির (X-Frame-Options) কারণে ব্রাউজার এটি ব্লক করতে পারে। দয়া করে ওপরের <b>"Open"</b> বাটনে ক্লিক করুন।
-                </p>
-              </div>
-              <iframe 
-                src={embeddedUrl.url} 
-                className="w-full h-full border-none relative z-10 bg-white"
-                sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                title={embeddedUrl.name}
-              />
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+
 
       {/* Footer Status Bar */}
       <footer className="bg-[#050505] border-t border-gray-800 px-4 md:px-8 py-3 flex flex-col md:flex-row justify-between items-center text-[10px] text-gray-600 font-bold tracking-widest uppercase mt-auto mb-4">
-        <div className="flex gap-4 mb-3 md:mb-0">
+        <div className="flex gap-4 mb-3 md:mb-0 items-center">
           <span className="font-bengali">সংযুক্ত সংবাদপত্র: ৬৪টি</span>
           <span className="font-bengali">টিভি চ্যানেল: ২২টি</span>
+          <button 
+            onClick={() => setIsFeedbackModalOpen(true)}
+            className="flex items-center gap-1.5 text-red-500 hover:text-red-400 transition-colors ml-4 border-l border-white/10 pl-4"
+          >
+            <MessageSquare size={12} />
+            <span className="font-bengali">মতামত দিন</span>
+          </button>
         </div>
         <div className="flex gap-4 items-center flex-wrap justify-center">
-          <span className="text-green-600 flex items-center gap-1">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse"></span> সার্ভার স্ট্যাটাস: অপটিমাল
+          <span className={`${isOnline ? 'text-green-600' : 'text-orange-500'} flex items-center gap-1`}>
+            {isOnline ? (
+              <>
+                <Wifi size={10} />
+                <span className="w-1.5 h-1.5 rounded-full bg-green-600 animate-pulse"></span> সার্ভার স্ট্যাটাস: অপটিমাল
+              </>
+            ) : (
+              <>
+                <WifiOff size={10} />
+                <span className="w-1.5 h-1.5 rounded-full bg-orange-500 animate-pulse"></span> অফলাইন মোড সক্রিয়
+              </>
+            )}
           </span>
           <span className="font-bengali">ডেভেলপার: <a href="https://www.facebook.com/share/1LBEzTyQoF/" target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-400 hover:underline">Faisal Kabir Rabi</a></span>
           <span className="font-bengali">© ২০২৪ নিউজহাব বাংলাদেশ লি:</span>
@@ -1874,7 +2025,7 @@ export default function App() {
               <ul className="space-y-4 text-gray-500 font-bengali text-sm">
                 <li><button onClick={() => { setActiveTab('home'); setSelectedCategory('all'); window.scrollTo({ top: 0 }); }} className="hover:text-red-500 transition-colors">হোম</button></li>
                 <li><button onClick={() => { setActiveTab('home'); setSelectedCategory('national'); window.scrollTo({ top: 0 }); }} className="hover:text-red-500 transition-colors">জাতীয় সংবাদ</button></li>
-                <li><button onClick={() => { setActiveTab('home'); setSelectedCategory('international'); window.scrollTo({ top: 0 }); }} className="hover:text-red-500 transition-colors">আন্তর্জাতিক</button></li>
+                <li><button onClick={() => setIsFeedbackModalOpen(true)} className="hover:text-red-500 transition-colors flex items-center gap-2"><MessageSquare size={14} /> মতামত দিন</button></li>
                 <li><button onClick={() => { setActiveTab('home'); setSelectedCategory('sports'); window.scrollTo({ top: 0 }); }} className="hover:text-red-500 transition-colors">খেলাধুলা</button></li>
               </ul>
             </div>
@@ -1893,15 +2044,21 @@ export default function App() {
           <div className="mt-16 pt-8 border-t border-gray-900 flex flex-col md:flex-row justify-between items-center gap-4">
             <p className="text-gray-600 text-[10px] uppercase tracking-[0.2em]">© 2026 LIVE NEWS PORTAL • POWERED BY AI</p>
             <div className="flex gap-6">
-              <span className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-gray-400">Privacy</span>
-              <span className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-gray-400">Terms</span>
-              <span className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-gray-400">Cookies</span>
+              <span onClick={() => alert('Privacy Policy: All news content is sourced from public feeds. Personal data is not shared.')} className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-red-500 transition-colors">Privacy</span>
+              <span onClick={() => alert('Terms of Service: By using this app, you agree to read news responsibly and respect the copyright of respective news owners.')} className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-red-500 transition-colors">Terms</span>
+              <span onClick={() => alert('Cookie Policy: We use strictly necessary cookies to save your preferences like dark mode and saved articles.')} className="text-gray-600 text-[10px] uppercase tracking-widest cursor-pointer hover:text-red-500 transition-colors">Cookies</span>
             </div>
           </div>
         </div>
       </footer>
 
+      <FeedbackModal 
+        isOpen={isFeedbackModalOpen} 
+        onClose={() => setIsFeedbackModalOpen(false)} 
+      />
+
       {/* Admin Panel Modal removed to use full page view */}
     </div>
+    </ErrorBoundary>
   );
 }
