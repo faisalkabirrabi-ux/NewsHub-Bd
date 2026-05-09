@@ -1,19 +1,28 @@
-import axios from 'axios';
+import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, serverTimestamp, query, orderBy } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { NewsArticle } from '../../data';
 
-const API = axios.create({
-  baseURL: '/api'
-});
-
-export const getNews = () => API.get<NewsArticle[]>('/news');
-export const addNews = (data: Partial<NewsArticle>) => API.post<NewsArticle>('/news', data);
-export const deleteNews = (id: number | string) => API.delete(`/news/${id}`);
-export const updateNews = (id: number | string, data: Partial<NewsArticle>) => API.patch(`/news/${id}`, data);
-
-// Keep the object for backward compatibility if needed, or remove it
 export const adminService = {
-  getAllNews: async () => (await getNews()).data,
-  addNews: async (news: Partial<NewsArticle>) => (await addNews(news)).data,
-  deleteNews,
-  updateNews
+  getAllNews: async () => {
+    const q = query(collection(db, 'articles'), orderBy('publishedAt', 'desc'));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(d => ({
+      id: d.id,
+      ...d.data()
+    })) as NewsArticle[];
+  },
+  addNews: async (news: Partial<NewsArticle>) => {
+    const docRef = await addDoc(collection(db, 'articles'), {
+      ...news,
+      publishedAt: serverTimestamp(),
+      createdAt: serverTimestamp()
+    });
+    return { id: docRef.id, ...news } as NewsArticle;
+  },
+  deleteNews: async (id: string | number) => {
+    await deleteDoc(doc(db, 'articles', String(id)));
+  },
+  updateNews: async (id: string | number, data: Partial<NewsArticle>) => {
+    await updateDoc(doc(db, 'articles', String(id)), data);
+  }
 };

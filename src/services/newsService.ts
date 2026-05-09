@@ -1,7 +1,7 @@
 import { NewsArticle } from '../data';
 
 export async function fetchLiveNews(category: string = 'all', maxRetries: number = 3): Promise<NewsArticle[]> {
-  const API_KEY = 'pub_bc5de72ec8cb424e9ceecc4bec439f87';
+  const API_KEY = import.meta.env.VITE_NEWSDATA_API_KEY || 'pub_bc5de72ec8cb424e9ceecc4bec439f87';
   
   let url = `https://newsdata.io/api/1/news?apikey=${API_KEY}&country=bd&language=bn`;
   // Use English parameters for international or English requests
@@ -13,13 +13,12 @@ export async function fetchLiveNews(category: string = 'all', maxRetries: number
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const controller = new AbortController();
-    const timeout = (attempt + 1) * 30000; // Increase timeout with each attempt
+    const timeout = (attempt + 1) * 15000; // Shorter timeout for mobile/fast UI
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
     try {
       if (attempt > 0) {
-        console.log(`Self-healing: News fetch retry attempt ${attempt}...`);
-        await wait(attempt * 2000); // Wait before retrying (2s, 4s, 6s)
+        await wait(attempt * 1000); // Gradual backoff
       }
 
       const response = await fetch(url, { signal: controller.signal });
@@ -27,11 +26,11 @@ export async function fetchLiveNews(category: string = 'all', maxRetries: number
 
       if (!response.ok) {
         if (response.status === 429) {
-            console.warn("NewsData.io Rate limit exceeded.");
-            // Don't throw for 429 to avoid crashing, just return empty [] or fake error below
-            throw new Error('Rate limit exceeded');
+            // Rate limit is expected on free tiers, don't spam retries
+            console.warn("NewsData.io Rate limit exceeded. Skipping live update.");
+            return [];
         }
-        throw new Error(`HTTP Error: ${response.status} ${response.statusText}`);
+        throw new Error(`HTTP Error: ${response.status}`);
       }
 
       const data = await response.json();
@@ -52,7 +51,7 @@ export async function fetchLiveNews(category: string = 'all', maxRetries: number
             summary: news.description || '',
             content: news.content || news.description || '',
             source: news.source_id || 'News Hub',
-            time: '', // will be populated outside or default
+            time: '', 
             image: news.image_url || null,
             category: category === 'english' ? 'english' : 'national',
             url: news.link || '',
@@ -61,7 +60,12 @@ export async function fetchLiveNews(category: string = 'all', maxRetries: number
           } as NewsArticle;
         });
       } else {
-         throw new Error('NewsData backend did not return success status');
+         // Some versions return 200 OK but status: "error" in body for rate limit
+         if (data.results?.message?.includes('rate limit') || data.status === "error") {
+            console.warn("NewsData.io returned error:", data.results?.message || "Check API credits");
+            return [];
+         }
+         throw new Error('NewsData backend error');
       }
 
     } catch (error: any) {
@@ -69,17 +73,13 @@ export async function fetchLiveNews(category: string = 'all', maxRetries: number
       const isLastAttempt = attempt === maxRetries;
       
       if (error.name === 'AbortError') {
-        console.warn(`Attempt ${attempt + 1} timed out`);
-      } else {
-        console.warn(`Attempt ${attempt + 1} failed: ${error.message}`);
-        // If 429, don't spam retries too fast, wait longer or just break
-        if (error.message.includes('Rate limit exceeded')) {
-            await wait(5000);
-        }
+        // Silent timeout
+      } else if (!isLastAttempt) {
+        console.warn(`News sync retrying...`);
       }
       
       if (isLastAttempt) {
-        console.error("Self-healing: All retry attempts exhausted for news fetch.");
+        // Return empty result silently if all retries fail
         return [];
       }
     }

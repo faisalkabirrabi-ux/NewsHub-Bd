@@ -1,6 +1,9 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
+import { GoogleGenAI, Type } from "@google/genai";
+
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 interface Message {
   role: 'user' | 'model';
@@ -52,25 +55,65 @@ If providing a news summary, use this format:
   "image_url": "Image URL if available"
 }`;
 
-      const res = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          messages: currentMessages,
-          systemInstruction
-        })
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: currentMessages.map(m => ({
+          role: m.role === 'user' ? 'user' : 'model',
+          parts: [{ text: m.text }]
+        })),
+        config: {
+          systemInstruction,
+          tools: [{
+            functionDeclarations: [{
+              name: "search_real_news",
+              description: "Search and fetch real news articles including their real image URLs from NewsData.io API.",
+              parameters: {
+                type: Type.OBJECT,
+                properties: {
+                  query: { type: Type.STRING, description: "Search keyword or topic" },
+                  language: { type: Type.STRING, description: "Language of the news: 'bn' for Bengali, 'en' for English" }
+                },
+                required: ["query"]
+              }
+            }]
+          }]
+        }
       });
 
-      if (!res.ok) throw new Error('API request failed');
-      const data = await res.json();
-      const text = data.text || "দুঃখিত, আমি উত্তর খুঁজে পাইনি।";
+      let text = response.text || "দুঃখিত, আমি উত্তর খুঁজে পাইনি।";
       
+      // Handle tool calls if any
+      const calls = response.functionCalls;
+      if (calls && calls.length > 0 && calls[0].name === "search_real_news") {
+        const args = calls[0].args as { query: string, language?: string };
+        const NEWS_API_KEY = import.meta.env.VITE_NEWSDATA_API_KEY || 'pub_bc5de72ec8cb424e9ceecc4bec439f87';
+        const url = `https://newsdata.io/api/1/news?apikey=${NEWS_API_KEY}&q=${encodeURIComponent(args.query)}&language=${args.language || 'bn'}`;
+        
+        const toolRes = await fetch(url);
+        const toolData = await toolRes.json();
+        const toolResults = { results: toolData.results || [] };
+
+        const secondResponse = await ai.models.generateContent({
+          model: "gemini-3-flash-preview",
+          contents: [
+            ...currentMessages.map(m => ({
+                role: m.role === 'user' ? 'user' : 'model',
+                parts: [{ text: m.text }]
+            })),
+            { role: 'model', parts: [{ functionCall: { name: calls[0].name, args: calls[0].args, id: calls[0].id } }] },
+            { role: 'user', parts: [{ functionResponse: { name: calls[0].name, response: toolResults, id: calls[0].id } }] }
+          ],
+          config: { systemInstruction }
+        });
+        text = secondResponse.text || "সংবাদ পাওয়া যায়নি।";
+      }
+
       // Check if it's JSON-like
       const isJson = text.trim().startsWith('{') && text.trim().endsWith('}');
       
       setMessages(prev => [...prev, { role: 'model', text, isJson }]);
     } catch (error: any) {
-      console.error(error);
+      console.error("Gemini Error:", error);
       setMessages(prev => [...prev, { role: 'model', text: 'দুঃখিত, সংযোগ বিচ্ছিন্ন হয়েছে। দয়া করে আবার চেষ্টা করুন।' }]);
     } finally {
       setIsLoading(false);

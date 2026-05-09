@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { addNews } from '../services/api';
+import { adminService } from '../services/api';
 import { Save, Image as ImageIcon, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -18,7 +18,7 @@ export const AddNews: React.FC = () => {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await addNews(formData);
+      await adminService.addNews(formData);
       setIsSuccess(true);
       // Also show the alert as requested in the snippet
       alert("News Added");
