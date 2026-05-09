@@ -486,7 +486,7 @@ export default function App() {
     const unsubscribe = onSnapshot(q, (snapshot) => {
       setActiveUsersCount(snapshot.size);
     }, (error) => {
-      console.error("Sessions active count listener failed:", error);
+      handleFirestoreError(error, OperationType.LIST, 'sessions');
     });
 
     return () => unsubscribe();
