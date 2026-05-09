@@ -58,10 +58,14 @@ export default defineConfig(({mode}) => {
           ],
         },
         manifest: {
-          name: 'Ajker Protidin News',
-          short_name: 'AjkerProtidin',
+          name: 'NewsHub BD',
+          short_name: 'NewsHub',
           description: 'সবার আগে সব খবর - আপনার হাতের মুঠোয়',
           theme_color: '#dc2626',
+          background_color: '#000000',
+          display: 'standalone',
+          orientation: 'portrait',
+          start_url: '/',
           icons: [
             {
               src: 'pwa-192x192.png',

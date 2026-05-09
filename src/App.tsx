@@ -517,10 +517,20 @@ export default function App() {
   const handleLogin = async () => {
     try {
       const provider = new GoogleAuthProvider();
+      // Add custom parameters to handle common WebView issues
+      provider.setCustomParameters({ prompt: 'select_account' });
+      
       await signInWithPopup(auth, provider);
       setIsAuthModalOpen(false);
-    } catch (error) {
+    } catch (error: any) {
       console.error("Login failed:", error);
+      if (error.code === 'auth/network-request-failed') {
+        alert("নেটওয়ার্ক সমস্যা! আপনার ইন্টারনেট কানেকশন চেক করুন অথবা কিছুক্ষণ পর আবার চেষ্টা করুন।");
+      } else if (error.code === 'auth/popup-blocked') {
+        alert("পপ-আপ উইন্ডো ব্লক করা হয়েছে। দয়া করে ব্রাউজার সেটিংসে পপ-আপ এলাউ করুন।");
+      } else {
+        alert("লগইন করতে সমস্যা হয়েছে। দয়া করে আবার চেষ্টা করুন।");
+      }
     }
   };
 
@@ -1151,6 +1161,22 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const handleVoicesChanged = () => {
+      window.speechSynthesis.getVoices();
+    };
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+      // Initial trigger
+      window.speechSynthesis.getVoices();
+    }
+    return () => {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+      }
+    };
+  }, []);
+
   const handleSpeak = (text: string) => {
     // Robust check for speechSynthesis support
     const hasSupport = 'speechSynthesis' in window && window.speechSynthesis !== undefined;
@@ -1166,6 +1192,13 @@ export default function App() {
         // Create the utterance
         const utterance = new SpeechSynthesisUtterance(text);
         
+        // Find a Bengali voice if available
+        const voices = window.speechSynthesis.getVoices();
+        const bnVoice = voices.find(v => v.lang.includes('bn') || v.name.includes('Bengali'));
+        if (bnVoice) {
+          utterance.voice = bnVoice;
+        }
+
         // Mobile browsers often need specific rate and pitch for non-default languages
         utterance.lang = 'bn-BD';
         utterance.rate = 0.85; // Slightly slower for better clarity in WebViews
@@ -1826,9 +1859,10 @@ export default function App() {
 
                   <button 
                     onClick={() => handleSpeak(selectedArticle.title + ". " + selectedArticle.content)}
-                    className={`p-2 rounded-xl transition-all border ${isPlaying ? 'bg-red-600 border-red-600 text-white' : (readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200')}`}
+                    className={`flex items-center gap-2 p-2 px-3 rounded-xl transition-all border ${isPlaying ? 'bg-red-600 border-red-600 text-white' : (readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200')}`}
                   >
                     {isPlaying ? <PauseCircle className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
+                    <span className="text-[10px] font-bold uppercase tracking-wider font-bengali">{isPlaying ? 'বন্ধ করুন' : 'শুনুন'}</span>
                   </button>
 
                   <button 

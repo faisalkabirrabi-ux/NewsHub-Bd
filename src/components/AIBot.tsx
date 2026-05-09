@@ -1,33 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Send, Bot, User, Loader2 } from 'lucide-react';
-import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
-
-let aiInstance: any = null;
-const getAiInstance = () => {
-  if (!aiInstance) {
-    if (typeof process !== 'undefined' && process.env && process.env.GEMINI_API_KEY) {
-       aiInstance = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-    } else {
-       // Fallback or warning if key is missing
-       aiInstance = new GoogleGenAI({ apiKey: "mock" });
-    }
-  }
-  return aiInstance;
-};
-
-const fetchNewsDecl: FunctionDeclaration = {
-  name: "search_real_news",
-  description: "Search and fetch real news articles including their real image URLs from NewsData.io API.",
-  parameters: {
-    type: Type.OBJECT,
-    properties: {
-      query: { type: Type.STRING, description: "Search keyword or topic" },
-      language: { type: Type.STRING, description: "Language of the news: 'en' for English, 'bn' for Bengali" }
-    },
-    required: ["query", "language"]
-  }
-};
 
 interface Message {
   role: 'user' | 'model';
@@ -55,88 +28,50 @@ export function AIBot() {
     if (!input.trim() || isLoading) return;
 
     const userMessage = input.trim();
+    const currentMessages = [...messages, { role: 'user', text: userMessage }];
+    
     setInput('');
-    setMessages(prev => [...prev, { role: 'user', text: userMessage }]);
+    setMessages(currentMessages);
     setIsLoading(true);
 
     try {
-      const ai = getAiInstance();
-      if (!ai || ai.apiKey === "mock") {
-         throw new Error("GEMINI_API_KEY is missing or invalid");
-      }
-
       const systemInstruction = `You are a strict news processor for BOTH English and Bengali news.
 
 Strict Rules / কঠোর নিয়ম:
-- NEVER generate fake news. ALWAYS use the 'search_real_news' tool first.
-- NEVER generate fake images.
-- Provide real photos using the 'image_url' returned by the tool.
+- NEVER generate fake news. ALWAYS use searching for real news if needed.
+- Provide real photos where possible.
+- If you can't find specific news, inform the user clearly.
 
-Final response MUST be exactly this JSON format:
+Final response should be helpful and in Bengali unless asked in English.
+If providing a news summary, use this format:
 {
-  "title": "News Title / নিউজ টাইটেল",
-  "summary": "Short summary / সংক্ষিপ্ত সারাংশ",
-  "content": "Detailed content / বিস্তারিত কনটেন্ট",
-  "source": "Source Name / সোর্স নাম",
-  "date": "Date / তারিখ",
-  "image_url": "The real image_url from the API tool result"
+  "title": "News Title",
+  "summary": "Short summary",
+  "content": "Detailed content",
+  "source": "Source Name",
+  "image_url": "Image URL if available"
 }`;
 
-      let contents: any[] = [{ role: 'user', parts: [{ text: userMessage }] }];
-
-      let response = await ai.models.generateContent({
-        model: 'gemini-3.1-flash-lite',
-        contents: contents,
-        config: {
-          systemInstruction,
-          tools: [{ functionDeclarations: [fetchNewsDecl] }],
-        }
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: currentMessages,
+          systemInstruction
+        })
       });
 
-      if (response.functionCalls && response.functionCalls.length > 0) {
-        const call = response.functionCalls[0];
-        if (call.name === "search_real_news") {
-           const query = call.args?.query || '';
-           const language = call.args?.language || 'bn';
-           const API_KEY = 'pub_bc5de72ec8cb424e9ceecc4bec439f87';
-           
-           contents.push({ role: 'model', parts: [{ functionCall: call }] });
-           
-           try {
-             let url = `https://newsdata.io/api/1/news?apikey=${API_KEY}&q=${encodeURIComponent(query)}&language=${language}`;
-             const apiRes = await fetch(url);
-             const apiData = await apiRes.json();
-             
-             contents.push({
-               role: 'user', 
-               parts: [{ 
-                 functionResponse: {
-                   name: call.name, 
-                   response: { results: apiData.results || [] } 
-                 } 
-               }]
-             });
-
-             response = await ai.models.generateContent({
-               model: 'gemini-3.1-flash-lite',
-               contents: contents,
-               config: {
-                 systemInstruction,
-                 responseMimeType: "application/json"
-               }
-             });
-           } catch(apiErr) {
-             console.error("API Fetch Error:", apiErr);
-           }
-        }
-      }
-
-      if (response.text) {
-        setMessages(prev => [...prev, { role: 'model', text: response.text, isJson: true }]);
-      }
+      if (!res.ok) throw new Error('API request failed');
+      const data = await res.json();
+      const text = data.text || "দুঃখিত, আমি উত্তর খুঁজে পাইনি।";
+      
+      // Check if it's JSON-like
+      const isJson = text.trim().startsWith('{') && text.trim().endsWith('}');
+      
+      setMessages(prev => [...prev, { role: 'model', text, isJson }]);
     } catch (error: any) {
       console.error(error);
-      setMessages(prev => [...prev, { role: 'model', text: 'দুঃখিত, কোনো একটি সমস্যা হয়েছে। আবার চেষ্টা করুন।' }]);
+      setMessages(prev => [...prev, { role: 'model', text: 'দুঃখিত, সংযোগ বিচ্ছিন্ন হয়েছে। দয়া করে আবার চেষ্টা করুন।' }]);
     } finally {
       setIsLoading(false);
     }
@@ -144,38 +79,29 @@ Final response MUST be exactly this JSON format:
 
   const renderJsonNews = (jsonText: string) => {
     try {
-      let data = JSON.parse(jsonText);
-      if (data.news && Array.isArray(data.news)) data = data.news;
-      const items = Array.isArray(data) ? data : [data];
-
-      if (items.length > 0 && items[0].title && items[0].summary) {
-        return (
-          <div className="flex flex-col gap-4 mt-2">
-            {items.map((item: any, idx: number) => (
-              <div key={idx} className="bg-white/5 border border-white/10 rounded-xl p-4">
-                {item.image_url && item.image_url !== 'null' && item.image_url.trim() !== '' && (
-                  <img 
-                    src={item.image_url} 
-                    alt={item.title} 
-                    className="w-full h-40 object-cover rounded-lg mb-4" 
-                    referrerPolicy="no-referrer"
-                  />
-                )}
-                <h4 className="text-white font-bold mb-2">{item.title}</h4>
-                <p className="text-gray-300 text-sm mb-3 font-bengali leading-relaxed">{item.summary}</p>
-                {item.content && <p className="text-gray-400 text-xs mb-3 font-bengali leading-relaxed">{item.content}</p>}
-                <div className="text-xs text-gray-500 uppercase tracking-wider flex justify-between">
-                  <span>{item.source || 'News'}</span>
-                </div>
-              </div>
-            ))}
+      const data = JSON.parse(jsonText);
+      return (
+        <div className="flex flex-col gap-4 mt-2">
+           <div className="bg-white/5 border border-white/10 rounded-xl p-4">
+            {data.image_url && data.image_url !== 'null' && (
+              <img 
+                src={data.image_url} 
+                alt={data.title} 
+                className="w-full h-40 object-cover rounded-lg mb-4" 
+                onError={(e) => (e.currentTarget.style.display = 'none')}
+              />
+            )}
+            <h4 className="text-white font-bold mb-2">{data.title}</h4>
+            <p className="text-gray-300 text-sm mb-3 font-bengali leading-relaxed">{data.summary}</p>
+            <div className="text-xs text-gray-500 uppercase flex justify-between">
+              <span>{data.source || 'News'}</span>
+            </div>
           </div>
-        );
-      }
+        </div>
+      );
     } catch(e) {
-      // fallback
+      return <p className="font-bengali text-sm md:text-base leading-relaxed">{jsonText}</p>;
     }
-    return <pre className="bg-black/50 p-4 rounded-xl overflow-x-auto text-xs text-green-400 font-mono mt-2">{jsonText}</pre>;
   };
 
   return (
@@ -204,12 +130,7 @@ Final response MUST be exactly this JSON format:
                 {msg.role === 'user' ? <User size={16} className="text-white" /> : <Bot size={16} className="text-white" />}
               </div>
               <div className={`p-4 rounded-2xl flex flex-col ${msg.role === 'user' ? 'bg-red-600/20 text-white rounded-tr-sm border border-red-500/20' : 'bg-white/5 text-gray-200 rounded-tl-sm border border-white/10'}`}>
-                {msg.isJson ? (
-                  <>
-                    <p className="text-sm opacity-80 mb-2">সংবাদ সংগ্রহ করা হয়েছে:</p>
-                    {renderJsonNews(msg.text)}
-                  </>
-                ) : (
+                {msg.isJson ? renderJsonNews(msg.text) : (
                   <p className="font-bengali text-sm md:text-base leading-relaxed">{msg.text}</p>
                 )}
               </div>
