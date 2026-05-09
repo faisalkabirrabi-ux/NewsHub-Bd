@@ -1,9 +1,10 @@
 import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
-import { createServer as createViteServer } from "vite";
 import axios from "axios";
 import Parser from "rss-parser";
+import { GoogleGenAI } from "@google/genai";
+import cors from "cors";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -77,7 +78,14 @@ async function fetchRssFeeds() {
 
 const app = express();
 const PORT = 3000;
+
+app.use(cors());
 app.use(express.json());
+
+// Check for required environment variables
+if (!process.env.GEMINI_API_KEY) {
+  console.warn('WARNING: GEMINI_API_KEY is not defined. AI Chat will not work.');
+}
 
 // API routes FIRST
 app.get("/api/health", (req, res) => res.json({ status: "ok" }));
@@ -98,27 +106,42 @@ app.post("/api/news", (req, res) => {
   res.status(201).json(newArticle);
 });
 
-// Production/Dev middleware setup
-async function setupMiddlewares() {
-  if (process.env.NODE_ENV !== "production" && !process.env.VERCEL) {
-    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath, { dotfiles: 'allow' }));
-    app.get('*', (req, res) => {
-      // Don't serve index.html for known API paths
-      if (req.path.startsWith('/api/')) return res.status(404).json({ error: 'Not Found' });
-      res.sendFile(path.join(distPath, 'index.html'));
-    });
-  }
-}
+// AI Chat Route
+app.post("/api/chat", async (req, res) => {
+  try {
+    const { messages } = req.body;
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({ error: "Gemini API key is not configured on the server." });
+    }
+    
+    const genAI = new GoogleGenAI(apiKey);
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-setupMiddlewares();
+    // Format messages for Gemini
+    const contents = messages.map((m: any) => ({
+      role: m.role === 'user' ? 'user' : 'model',
+      parts: [{ text: m.text }]
+    }));
+
+    const result = await model.generateContent({ contents });
+    const response = await result.response;
+    res.json({ text: response.text() });
+  } catch (error: any) {
+    console.error("Gemini server error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // Only listen if not on Vercel
 if (!process.env.VERCEL) {
-  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+  async function setupDev() {
+    const { createServer: createViteServer } = await import("vite");
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
+    app.use(vite.middlewares);
+    app.listen(PORT, "0.0.0.0", () => console.log(`Server running on port ${PORT}`));
+  }
+  setupDev();
 }
 
 export default app;

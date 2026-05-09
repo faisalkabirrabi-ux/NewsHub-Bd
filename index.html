@@ -9,8 +9,24 @@
     <title>NewsHub BD - সবার আগে সব খবর</title>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-loading" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #000; color: #fff; font-family: sans-serif;">
+        <h2 style="color: #dc2626;">NewsHub BD</h2>
+        <p>লোড হচ্ছে... (Loading...)</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      console.log('Main bundle requested...');
+      // If root still has loading after 8s, something is wrong
+      setTimeout(() => {
+        const root = document.getElementById('root');
+        if (root && root.innerHTML.includes('Loading...')) {
+          console.warn('App is taking too long to load.');
+          // Optional: root.innerHTML += '<p>Check your internet connection</p>';
+        }
+      }, 8000);
+    </script>
   </body>
 </html>
 

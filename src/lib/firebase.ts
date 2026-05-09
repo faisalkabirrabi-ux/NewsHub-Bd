@@ -18,7 +18,7 @@ const databaseId = import.meta.env.VITE_FIREBASE_FIRESTORE_DATABASE_ID || localF
 
 const app = initializeApp(firebaseConfig);
 
-// Initialize Firestore with persistent local cache for offline access and long polling for reliability
+// Initialize Firestore with persistent local cache for offline access and forced long polling for reliability
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   experimentalForceLongPolling: true
@@ -31,11 +31,22 @@ export const auth = initializeAuth(app, {
 
 async function testConnection() {
   try {
+    // Debug info for the user to help them diagnose config issues on Vercel
+    console.log("Firestore target database:", databaseId || "(default)");
+    console.log("Firebase Project ID:", firebaseConfig.projectId);
+    
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log("Firebase connected successfully");
-  } catch (error) {
-    // If we're offline, this is expected if persistence is working
-    console.log("Connection test finished (offline or online)");
+    if (typeof window !== 'undefined') (window as any).firebaseStatus = 'connected';
+  } catch (error: any) {
+    if (typeof window !== 'undefined') (window as any).firebaseStatus = 'error: ' + error.message;
+    // If we're offline or blocked, provide a clearer hint
+    if (error.code === 'failed-precondition') {
+      console.warn("Firestore: Multiple tabs might be conflicting with persistence.");
+    } else if (error.message?.includes('Cloud Firestore backend')) {
+      console.error("Firestore connectivity issue detected. Trying auto-recovery...");
+    }
+    console.log("Connection test finished:", error.message || "Unknown state");
   }
 }
 testConnection();

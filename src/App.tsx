@@ -99,8 +99,8 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     operationType,
     path
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-  throw new Error(JSON.stringify(errInfo));
+  console.error('Firestore Error Detailed: ', JSON.stringify(errInfo));
+  // Not throwing here to prevent "White Screen of Death" during background listener failures
 }
 
 // Neutral minimalist placeholders without AI people
