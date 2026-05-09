@@ -115,18 +115,18 @@ app.post("/api/chat", async (req, res) => {
       return res.status(500).json({ error: "Gemini API key is not configured on the server." });
     }
     
-    const genAI = new GoogleGenAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+    const genAI = new GoogleGenAI({ apiKey });
+    
+    // In @google/genai, we use ai.models.generateContent directly
+    const result = await genAI.models.generateContent({
+      model: "gemini-3-flash-preview",
+      contents: messages.map((m: any) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.text }]
+      }))
+    });
 
-    // Format messages for Gemini
-    const contents = messages.map((m: any) => ({
-      role: m.role === 'user' ? 'user' : 'model',
-      parts: [{ text: m.text }]
-    }));
-
-    const result = await model.generateContent({ contents });
-    const response = await result.response;
-    res.json({ text: response.text() });
+    res.json({ text: result.text });
   } catch (error: any) {
     console.error("Gemini server error:", error);
     res.status(500).json({ error: error.message });

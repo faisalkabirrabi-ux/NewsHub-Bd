@@ -6,7 +6,7 @@
       "destination": "/api/index.ts"
     },
     {
-      "source": "/((?!api|assets|static|favicon.ico|manifest.webmanifest|sw.js|workbox-|robots.txt).*)",
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]
