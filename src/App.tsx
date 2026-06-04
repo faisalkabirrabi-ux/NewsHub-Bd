@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, Component } from 'react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
-import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2, MessageSquare, Wifi, WifiOff, User, Heart } from 'lucide-react';
+import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2, MessageSquare, Wifi, WifiOff, User, Heart, Link, Check } from 'lucide-react';
 import { topNews, banglaPapers, englishPapers, tvChannels, internationalChannels, NewsArticle, MediaSource } from './data';
 import { fetchLiveNews } from './services/newsService';
 import NewsRow from './components/NewsRow';
@@ -295,16 +295,70 @@ const NewsCard: React.FC<{
     y.set(0);
   };
 
+  const [contextMenu, setContextMenu] = React.useState<{ x: number, y: number } | null>(null);
+  const [copied, setCopied] = React.useState(false);
+
+  // Long press for mobile
+  const timerRef = React.useRef<NodeJS.Timeout>();
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    const touch = e.touches[0];
+    const rect = e.currentTarget.getBoundingClientRect();
+    timerRef.current = setTimeout(() => {
+      setContextMenu({ x: touch.clientX - rect.left, y: touch.clientY - rect.top });
+    }, 500); // 500ms long press
+  };
+
+  const handleTouchEnd = () => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const rect = e.currentTarget.getBoundingClientRect();
+    setContextMenu({ x: e.clientX - rect.left, y: e.clientY - rect.top });
+  };
+
+  const handleCopy = (e: React.MouseEvent | React.TouchEvent) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(news.url && news.url !== '#' ? news.url : window.location.href);
+    setCopied(true);
+    setTimeout(() => {
+      setCopied(false);
+      setContextMenu(null);
+    }, 1500);
+  };
+
+  React.useEffect(() => {
+    if (contextMenu) {
+      const hide = () => setContextMenu(null);
+      const timer = setTimeout(() => {
+         document.addEventListener('click', hide);
+         document.addEventListener('touchstart', hide);
+      }, 100);
+      return () => {
+        clearTimeout(timer);
+        document.removeEventListener('click', hide);
+        document.removeEventListener('touchstart', hide);
+      };
+    }
+  }, [contextMenu]);
+
   return (
   <motion.article 
     layout
     initial={{ opacity: 0, scale: 0.95, y: 20 }}
     animate={{ opacity: 1, scale: 1, y: 0, transition: { delay: index * 0.05, duration: 0.4 } }}
     exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+    whileTap={{ scale: 0.98 }}
     className="group relative flex flex-col skeuo-card overflow-hidden cursor-pointer"
     style={{ rotateX, rotateY, transformPerspective: 1000 }}
     onMouseMove={handleMouseMove}
     onMouseLeave={handleMouseLeave}
+    onContextMenu={handleContextMenu}
+    onTouchStart={handleTouchStart}
+    onTouchEnd={handleTouchEnd}
+    onTouchMove={handleTouchEnd}
     onClick={() => onNewsClick(news)}
     drag={onDismiss ? "x" : false}
     dragConstraints={{ left: 0, right: 0 }}
@@ -312,6 +366,31 @@ const NewsCard: React.FC<{
     onDragEnd={handleDragEnd}
   >
     <div className="aspect-[16/9] w-full overflow-hidden relative rounded-t-xl z-0">
+      {contextMenu && (
+        <div 
+           className="absolute z-50 bg-white dark:bg-[#1a1a1a] shadow-2xl rounded-xl border border-gray-200 dark:border-white/10 p-1.5 min-w-[140px]"
+           style={{ left: Math.min(contextMenu.x, 200), top: Math.min(contextMenu.y, 150) }}
+           onClick={(e) => e.stopPropagation()}
+           onTouchStart={(e) => e.stopPropagation()}
+        >
+          <button
+            onClick={handleCopy}
+            className="w-full flex items-center justify-between gap-3 px-3 py-2 text-sm font-bengali font-bold rounded-lg hover:bg-gray-100 dark:hover:bg-white/5 transition-colors text-gray-800 dark:text-gray-200"
+          >
+            {copied ? (
+              <>
+                <span className="text-green-500">কপি হয়েছে</span>
+                <Check size={16} className="text-green-500" />
+              </>
+            ) : (
+              <>
+                <span>লিংক কপি করুন</span>
+                <Link size={16} />
+              </>
+            )}
+          </button>
+        </div>
+      )}
       <img 
         src={news.image} 
         alt={news.title}
