@@ -3,7 +3,6 @@ import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
 import { registerSW } from 'virtual:pwa-register';
-import { SpeedInsights } from '@vercel/speed-insights/react';
 
 // Register PWA Service Worker
 registerSW({
@@ -18,6 +17,5 @@ registerSW({
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <App />
-    <SpeedInsights />
   </StrictMode>,
 );

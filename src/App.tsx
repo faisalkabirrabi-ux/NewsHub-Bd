@@ -1,15 +1,20 @@
 import React, { useState, useEffect, useMemo, Component } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
-import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2, MessageSquare, Wifi, WifiOff, User } from 'lucide-react';
+import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
+import { Newspaper, Tv, Globe, MapPin, X, ArrowUpRight, ArrowRight, Calendar, Search, Menu, Bookmark, BookmarkCheck, Share2, Image as ImageIcon, Download, Volume2, PauseCircle, Sparkles, RefreshCw, TrendingUp, Type, Coins, Bot, ExternalLink, Home, Trophy, SlidersHorizontal, Settings2, Clock, Moon, Sun, Play, Info, ShieldCheck, LogIn, LogOut, PlusCircle, Trash2, MessageSquare, Wifi, WifiOff, User, Heart } from 'lucide-react';
 import { topNews, banglaPapers, englishPapers, tvChannels, internationalChannels, NewsArticle, MediaSource } from './data';
 import { fetchLiveNews } from './services/newsService';
 import NewsRow from './components/NewsRow';
 import FeedbackModal from './components/FeedbackModal';
 import ArticleComments from './components/ArticleComments';
 import AnalyticsTracker from './components/AnalyticsTracker';
+import { LoginModal } from './components/LoginModal';
+import { LoadingScreen } from './components/LoadingScreen';
+import { FifaWorldCupBanner } from './components/FifaWorldCupBanner';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { auth, db } from './lib/firebase';
 import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut } from 'firebase/auth';
+import jsPDF from 'jspdf';
+import { toJpeg } from 'html-to-image';
 import { collection, addDoc, getDocs, query, where, orderBy, limit, serverTimestamp, deleteDoc, doc, onSnapshot } from 'firebase/firestore';
 import AdminApp from './admin/AdminApp';
 import { AIBot } from './components/AIBot';
@@ -103,13 +108,13 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
   // Not throwing here to prevent "White Screen of Death" during background listener failures
 }
 
-// Neutral minimalist placeholders without AI people
-const categoryKeywords: Record<string, string[]> = {
-  default: ['data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjUwMCIgZmlsbD0iIzFBMUExQSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzMzMyIgZmlsbC1vcGFjaXR5PSIwLjUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk5vIEltYWdlIEF2YWlsYWJsZTwvdGV4dD48L3N2Zz4=']
-};
-
+// Use picsum.photos for reliable, varied placeholder images
 const getVarietyImage = (title: string, category: string) => {
-  return categoryKeywords.default[0];
+  const normalizedCategory = category.toLowerCase();
+  // We use the title hash as a seed to ensure the same news article always gets the same image
+  const seedStr = title.replace(/[^a-zA-Z0-9]/g, '').substring(0, 10);
+  const seed = seedStr || normalizedCategory;
+  return `https://picsum.photos/seed/${seed}/800/500`;
 };
 
 const isValidImageUrl = (url: string | null | undefined): boolean => {
@@ -134,7 +139,9 @@ const handleImageError = (e: React.SyntheticEvent<HTMLImageElement, Event>) => {
   const target = e.currentTarget;
   if (target.getAttribute('data-failed-all')) return;
   
-  const fallbackUrl = "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4MDAiIGhlaWdodD0iNTAwIj48cmVjdCB3aWR0aD0iODAwIiBoZWlnaHQ9IjUwMCIgZmlsbD0iIzFBMUExQSIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiBmb250LWZhbWlseT0ic2Fucy1zZXJpZiIgZm9udC1zaXplPSIyNCIgZmlsbD0iIzMzMyIgZmlsbC1vcGFjaXR5PSIwLjUiIGRvbWluYW50LWJhc2VsaW5lPSJtaWRkbGUiIHRleHQtYW5jaG9yPSJtaWRkbGUiPk5vIEltYWdlIEF2YWlsYWJsZTwvdGV4dD48L3N2Zz4=";
+  // Use picsum for reliable fallback
+  const randomSeed = Math.floor(Math.random() * 1000);
+  const fallbackUrl = `https://picsum.photos/seed/fallback${randomSeed}/800/500`;
   
   target.setAttribute('data-failed-all', 'true');
   target.src = fallbackUrl;
@@ -245,14 +252,66 @@ const NewsCard: React.FC<{
   onDownloadClick: (n: NewsArticle) => void;
   isSaved: boolean;
   onToggleBookmark: (e: React.MouseEvent, id: string) => void;
-}> = ({ news, onNewsClick, onShareClick, onDownloadClick, isSaved, onToggleBookmark }) => (
+  onDismiss?: (e: React.MouseEvent, id: string) => void;
+  index?: number;
+}> = ({ news, onNewsClick, onShareClick, onDownloadClick, isSaved, onToggleBookmark, onDismiss, index = 0 }) => {
+  const { likes, shares } = React.useMemo(() => ({
+    likes: convertToBengaliDigit(Math.floor(Math.random() * 500) + 50),
+    shares: convertToBengaliDigit(Math.floor(Math.random() * 100) + 10)
+  }), [news.id]);
+
+  const handleDragEnd = (_event: any, info: any) => {
+    const threshold = 100;
+    if (Math.abs(info.offset.x) > threshold) {
+      if (onDismiss) onDismiss(_event, news.id);
+    }
+  };
+
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+
+  const mouseXSpring = useSpring(x, { stiffness: 300, damping: 30 });
+  const mouseYSpring = useSpring(y, { stiffness: 300, damping: 30 });
+
+  const rotateX = useTransform(mouseYSpring, [-0.5, 0.5], ["7deg", "-7deg"]);
+  const rotateY = useTransform(mouseXSpring, [-0.5, 0.5], ["-7deg", "7deg"]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    // Only apply on desktop
+    if (window.innerWidth < 768) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const xPct = mouseX / width - 0.5;
+    const yPct = mouseY / height - 0.5;
+    x.set(xPct);
+    y.set(yPct);
+  };
+
+  const handleMouseLeave = () => {
+    x.set(0);
+    y.set(0);
+  };
+
+  return (
   <motion.article 
     layout
-    whileHover={{ y: -5 }}
-    className="group relative flex flex-col bg-[#141414] rounded-2xl overflow-hidden border border-white/5 hover:border-red-600/30 transition-all duration-300 shadow-xl cursor-pointer"
+    initial={{ opacity: 0, scale: 0.95, y: 20 }}
+    animate={{ opacity: 1, scale: 1, y: 0, transition: { delay: index * 0.05, duration: 0.4 } }}
+    exit={{ opacity: 0, scale: 0.9, transition: { duration: 0.2 } }}
+    className="group relative flex flex-col skeuo-card overflow-hidden cursor-pointer"
+    style={{ rotateX, rotateY, transformPerspective: 1000 }}
+    onMouseMove={handleMouseMove}
+    onMouseLeave={handleMouseLeave}
     onClick={() => onNewsClick(news)}
+    drag={onDismiss ? "x" : false}
+    dragConstraints={{ left: 0, right: 0 }}
+    dragElastic={0.8}
+    onDragEnd={handleDragEnd}
   >
-    <div className="aspect-[16/9] w-full overflow-hidden relative">
+    <div className="aspect-[16/9] w-full overflow-hidden relative rounded-t-xl z-0">
       <img 
         src={news.image} 
         alt={news.title}
@@ -269,12 +328,37 @@ const NewsCard: React.FC<{
       </div>
 
       <div className="absolute top-3 right-3 z-10 flex gap-2">
-        <button 
-          onClick={(e) => { e.stopPropagation(); onToggleBookmark(e, news.id); }}
-          className={`p-2 rounded-xl backdrop-blur-md transition-all ${isSaved ? 'bg-red-600 text-white shadow-red-600/50' : 'bg-black/40 text-white/70 hover:bg-black/60 hover:text-white border border-white/10'}`}
+        <motion.button 
+          whileTap={{ scale: 0.85 }}
+          onClick={(e: React.MouseEvent) => { e.stopPropagation(); onToggleBookmark(e, news.id); }}
+          className={`p-2 rounded-xl backdrop-blur-md skeuo-btn relative overflow-hidden flex items-center justify-center w-8 h-8 ${isSaved ? 'text-red-500' : 'text-gray-400 hover:text-white'}`}
         >
-          {isSaved ? <BookmarkCheck size={16} fill="currentColor" strokeWidth={2.5} /> : <Bookmark size={16} strokeWidth={2.5} />}
-        </button>
+          <AnimatePresence mode="popLayout" initial={false}>
+            {isSaved ? (
+              <motion.div
+                key="saved"
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1.1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 400, damping: 8, mass: 0.8 }}
+                className="absolute inset-0 flex items-center justify-center"
+              >
+                <BookmarkCheck size={16} fill="currentColor" strokeWidth={2.5} />
+              </motion.div>
+            ) : (
+              <motion.div
+                key="unsaved"
+                initial={{ scale: 0.5, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                exit={{ scale: 0, opacity: 0 }}
+                transition={{ type: "spring", stiffness: 400, damping: 15 }}
+                className="absolute inset-0 flex items-center justify-center"
+              >
+                <Bookmark size={16} strokeWidth={2.5} />
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </motion.button>
       </div>
     </div>
 
@@ -295,12 +379,17 @@ const NewsCard: React.FC<{
       </p>
 
       <div className="pt-2 flex items-center justify-between mt-auto">
-         <div className="flex items-center gap-2">
+         <div className="flex items-center gap-3">
+            <div className="flex items-center gap-1.5 text-gray-400 font-bengali text-xs">
+              <Heart size={14} className="text-red-500" />
+              <span>{likes}</span>
+            </div>
             <button 
               onClick={(e) => { e.stopPropagation(); onShareClick(news); }}
-              className="p-2 rounded-xl bg-white/5 hover:bg-red-600 hover:text-white text-gray-400 transition-all border border-white/5"
+              className="flex items-center gap-1.5 p-1.5 px-2 rounded-xl bg-white/5 hover:bg-red-600 hover:text-white text-gray-400 transition-all border border-white/5 font-bengali text-xs"
             >
-              <Share2 size={16} />
+              <Share2 size={14} />
+              <span>{shares}</span>
             </button>
          </div>
          
@@ -310,7 +399,8 @@ const NewsCard: React.FC<{
       </div>
     </div>
   </motion.article>
-);
+  );
+};
 
 // Administrative features moved to AdminApp
 const convertToBengaliDigit = (num: number) => {
@@ -429,6 +519,13 @@ export default function App() {
   const [currentTickerIndex, setCurrentTickerIndex] = useState(0);
 
   const [liveNews, setLiveNews] = useState<NewsArticle[]>(topNews);
+  const [pendingNews, setPendingNews] = useState<NewsArticle[]>([]);
+  const [dismissedNewsIds, setDismissedNewsIds] = useState<Set<string>>(new Set());
+  const liveNewsRef = React.useRef(liveNews);
+  React.useEffect(() => {
+    liveNewsRef.current = liveNews;
+  }, [liveNews]);
+
   const [isRefreshing, setIsRefreshing] = useState(true);
   const [isScraping, setIsScraping] = useState(false);
   const [isGHSynced, setIsGHSynced] = useState(false);
@@ -660,8 +757,10 @@ export default function App() {
     return () => clearInterval(pInterval);
   }, []);
 
-  const fetchRSS = React.useCallback(async () => {
-    setIsRefreshing(true);
+  const fetchRSS = React.useCallback(async (isBackground = false) => {
+    if (!isBackground) {
+      setIsRefreshing(true);
+    }
     setIsScraping(true);
     try {
       // Fetching multiple categories for better coverage
@@ -675,24 +774,15 @@ export default function App() {
         { url: 'https://news.google.com/rss/search?q=ভিসা+পাসপোর্ট+ইমিগ্রেশন&hl=bn&gl=BD&ceid=BD:bn', cat: 'visa' },
         // Top Newspapers
         { url: 'https://www.prothomalo.com/feed', cat: 'national' },
-        { url: 'https://www.ittefaq.com.bd/rss.xml', cat: 'national' },
-        { url: 'https://www.jugantor.com/rss.xml', cat: 'national' },
-        { url: 'https://kalerkantho.com/rss.xml', cat: 'national' },
-        { url: 'https://dailyinqilab.com/rss/rss.xml', cat: 'national' },
-        { url: 'https://www.bd-pratidin.com/rss.xml', cat: 'national' },
-        { url: 'https://www.dhakapost.com/rss', cat: 'national' },
-        { url: 'https://www.banglanews24.com/rss/rss.xml', cat: 'national' },
         { url: 'https://www.jagonews24.com/rss/rss.xml', cat: 'national' },
-        { url: 'https://www.samakal.com/rss.xml', cat: 'national' },
-        { url: 'https://www.bhorerkagoj.com/feed', cat: 'national' },
-        { url: 'https://www.nayadiganta.com/rss.xml', cat: 'national' },
-        { url: 'https://www.risingbd.com/rss', cat: 'national' },
         
         // Television Channels
-        { url: 'https://news.google.com/rss/search?q=jamuna+tv+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
-        { url: 'https://news.google.com/rss/search?q=somoy+tv+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
-        { url: 'https://news.google.com/rss/search?q=channel+i+latest&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' },
-        { url: 'https://news.google.com/rss/search?q=independent+tv+bangladesh&hl=bn&gl=BD&ceid=BD:bn', cat: 'tv' }
+        { url: 'https://www.channelionline.com/feed', cat: 'tv' },
+        { url: 'http://feeds.bbci.co.uk/news/world/rss.xml', cat: 'international' },
+        { url: 'http://rss.cnn.com/rss/edition_world.rss', cat: 'international' },
+        { url: 'https://www.aljazeera.com/xml/rss/all.xml', cat: 'international' },
+        { url: 'https://www.thedailystar.net/rss.xml', cat: 'english' },
+        { url: 'https://en.prothomalo.com/feed', cat: 'english' }
       ];
 
 
@@ -706,8 +796,15 @@ export default function App() {
            return items.map(item => {
              const hasTimestamp = item.timestamp && !isNaN(item.timestamp);
              const ts = hasTimestamp ? item.timestamp! : Date.now();
+             
+             let finalImage = item.image;
+             if (!isValidImageUrl(finalImage)) {
+               finalImage = getVarietyImage(item.title, item.category);
+             }
+
              return {
                ...item, 
+               image: finalImage,
                isTopSource: true,
                timestamp: ts,
                time: item.time || getRelativeTimeBengali(ts)
@@ -721,6 +818,7 @@ export default function App() {
 
       // Try direct GitHub JSON fetch from multiple possible locations
       const ghSources = [
+        '/api/news',
         'https://raw.githubusercontent.com/faisalkabir/my-news-portal/main/news.json',
         'https://raw.githubusercontent.com/faisalkabir/my-news-portal/main/data.json',
         'https://raw.githubusercontent.com/faisalkabirrabi-ux/my-news-portal/main/news.json',
@@ -779,11 +877,11 @@ export default function App() {
                   summary: item.summary || item.description || 'সারসংক্ষেপ নেই',
                   content: item.content || item.summary || '',
                   source: item.source || 'গিটহাব আপডেট',
-                  time: getRelativeTimeBengali(itemTimestamp),
+                  time: getRelativeTimeBengali(item.timestamp || itemTimestamp),
                   image: finalImage,
                   category: cat as any,
                   url: item.url || item.link || '#',
-                  timestamp: itemTimestamp,
+                  timestamp: item.timestamp || itemTimestamp,
                   isTopSource: true
                 };
               });
@@ -857,9 +955,10 @@ export default function App() {
           
           if (data && data.status === 'ok') {
              return data.items.map((item: any, i: number) => {
-               let sourceStr = item.title.includes(' - ') ? item.title.split(' - ').pop() : (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
+               const rawTitle = item.title || '';
+               let sourceStr = rawTitle.includes(' - ') ? rawTitle.split(' - ').pop() : (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
                if (sourceStr && sourceStr.toLowerCase().includes('google news')) sourceStr = (feed.cat === 'tv' ? 'টিভি নিউজ' : 'সংবাদ মাধ্যম');
-               const titleStr = item.title.includes(' - ') ? item.title.substring(0, item.title.lastIndexOf(' - ')) : item.title;
+               const titleStr = rawTitle.includes(' - ') ? rawTitle.substring(0, rawTitle.lastIndexOf(' - ')) : (rawTitle || 'শিরোনাম নেই');
                
                const topSources = ['Prothom Alo', 'Somoy TV', 'Jamuna TV', 'The Daily Star', 'প্রথম আলো', 'সময় টেলিভিশন', 'যমুনা টেলিভিশন', 'ইত্তেফাক', 'ইত্তেফাক ডটকম', 'বাংলাদেশ প্রতিদিন', 'কালের কণ্ঠ', 'চ্যানেল আই', 'NTV', 'একাত্তর টিভি'];
                const isTopSource = topSources.some(s => sourceStr.toLowerCase().includes(s.toLowerCase()));
@@ -870,7 +969,8 @@ export default function App() {
                } else if (item.thumbnail) {
                  originalImage = item.thumbnail;
                } else {
-                 const imgMatch = (item.description || '').match(/<img[^>]+src="([^">]+)"/);
+                 const searchTarget = (item.description || '') + ' ' + (item.content || '');
+                 const imgMatch = searchTarget.match(/<img[^>]+src=["']([^"']+)["']/i);
                  if (imgMatch && imgMatch[1]) {
                    originalImage = imgMatch[1];
                    if (originalImage.startsWith('//')) originalImage = 'https:' + originalImage;
@@ -909,56 +1009,69 @@ export default function App() {
       });
 
       // Helper to process and update state with new chunks of news incrementally
-      const processNewsChunk = (newArticles: NewsArticle[]) => {
+      const processNewsChunk = (newArticles: NewsArticle[], isBackgroundProcess: boolean) => {
         if (newArticles.length === 0) return;
         
         const freshUnique = new Map();
         newArticles.forEach(n => {
-          const key = `${n.title.trim().toLowerCase()}-${n.source}`;
+          const rawNTitle = n.title || 'শিরোনাম নেই';
+          const key = `${rawNTitle.trim().toLowerCase()}-${n.source}`;
           if (!freshUnique.has(key)) freshUnique.set(key, n);
         });
         const deduplicated = Array.from(freshUnique.values()) as NewsArticle[];
 
-        setLiveNews(prev => {
-            const now = Date.now();
-            const fortyEightHoursAgo = now - (48 * 60 * 60 * 1000); 
-            
-            const combined = [...deduplicated, ...prev];
-            const unique = new Map();
-            
-            combined.forEach(n => {
-               // Filter out news older than 48 hours
-               if (n.timestamp && n.timestamp < fortyEightHoursAgo) return;
+        const now = Date.now();
+        const fortyEightHoursAgo = now - (48 * 60 * 60 * 1000); 
+        
+        const prev = liveNewsRef.current;
+        const combined = [...deduplicated, ...prev];
+        const unique = new Map();
+        
+        combined.forEach(n => {
+           // Filter out news older than 48 hours
+           if (n.timestamp && n.timestamp < fortyEightHoursAgo) return;
 
-               // Robust deduplication key: title without source suffix
-               const titleKey = n.title.split(' - ')[0].trim().toLowerCase()
-                                      .replace(/[।\s]/g, ''); // Remove Bengali full stops and spaces
-               
-               // Keep the version with the highest timestamp (latest)
-               if (!unique.has(titleKey)) {
-                 unique.set(titleKey, n);
-               } else {
-                 const existing = unique.get(titleKey);
-                 if ((n.timestamp || 0) > (existing.timestamp || 0)) {
-                   unique.set(titleKey, n);
-                 }
-               }
-            });
-
-            // Sort primarily by timestamp (latest first)
-            const sorted = Array.from(unique.values()).sort((a: any, b: any) => {
-               return (b.timestamp || 0) - (a.timestamp || 0);
-            });
-
-            const trulyUniqueIds = new Set();
-            const finalUnique = sorted.filter((n: any) => {
-               if (trulyUniqueIds.has(n.id)) return false;
-               trulyUniqueIds.add(n.id);
-               return true;
-            });
-
-            return finalUnique.slice(0, 100) as NewsArticle[];
+           // Robust deduplication key: title without source suffix
+           const rawNTitle = n.title || 'শিরোনাম নেই';
+           const titleKey = rawNTitle.split(' - ')[0].trim().toLowerCase()
+                                  .replace(/[।\s]/g, ''); // Remove Bengali full stops and spaces
+           
+           // Keep the version with the highest timestamp (latest)
+           if (!unique.has(titleKey)) {
+             unique.set(titleKey, n);
+           } else {
+             const existing = unique.get(titleKey);
+             if ((n.timestamp || 0) > (existing.timestamp || 0)) {
+               unique.set(titleKey, n);
+             }
+           }
         });
+
+        // Sort primarily by timestamp (latest first)
+        const sorted = Array.from(unique.values()).sort((a: any, b: any) => {
+           return (b.timestamp || 0) - (a.timestamp || 0);
+        });
+
+        const trulyUniqueIds = new Set();
+        const finalUnique = sorted.filter((n: any) => {
+           if (trulyUniqueIds.has(n.id)) return false;
+           trulyUniqueIds.add(n.id);
+           return true;
+        }).slice(0, 100) as NewsArticle[];
+
+        if (isBackgroundProcess) {
+            const prevIds = new Set(prev.map(n => n.id));
+            const newFetched = finalUnique.filter(n => !prevIds.has(n.id));
+            if (newFetched.length > 0) {
+               setPendingNews(p => {
+                  const pUnique = new Map();
+                  [...newFetched, ...p].forEach(n => pUnique.set(n.id, n));
+                  return Array.from(pUnique.values());
+               });
+            }
+        } else {
+            setLiveNews(finalUnique);
+        }
         
         const d = new Date();
         setSyncTime(`সদ্য আপডেট: ${d.toLocaleTimeString('bn-BD', {hour: '2-digit', minute:'2-digit'})}`);
@@ -976,7 +1089,7 @@ export default function App() {
             ghSuccessCount++;
             setIsGHSynced(true);
          }
-         processNewsChunk(initialFastNews);
+         processNewsChunk(initialFastNews, isBackground);
          // Turn off the refreshing spinner since fast news is loaded
          setIsRefreshing(false);
       }
@@ -985,7 +1098,7 @@ export default function App() {
       Promise.all(rssPromises).then(rssResults => {
          const flatRssNews = rssResults.flat();
          if (flatRssNews.length > 0) {
-             processNewsChunk(flatRssNews);
+             processNewsChunk(flatRssNews, isBackground);
          }
       }).catch(e => {
          console.error("RSS sync error", e);
@@ -1023,7 +1136,7 @@ export default function App() {
     window.addEventListener('focus', handleFocus);
 
     // Refresh every 3 minutes for background updates
-    const newsInterval = setInterval(fetchRSS, 3 * 60 * 1000);
+    const newsInterval = setInterval(() => fetchRSS(true), 3 * 60 * 1000);
 
     return () => {
        window.removeEventListener('visibilitychange', handleVisibilityChange);
@@ -1081,6 +1194,51 @@ export default function App() {
     } else {
       navigator.clipboard.writeText(`${news.title}\n${window.location.href}`);
       alert("লিংক কপি করা হয়েছে!");
+    }
+  };
+
+  const handleDownloadPDF = async () => {
+    const element = document.getElementById('article-content-to-pdf');
+    if (!element) return;
+    
+    // Add temporary styling to format for PDF properly
+    const originalStyle = element.style.cssText;
+    element.style.padding = '20px';
+    element.style.background = '#ffffff'; // force white background for PDF
+    element.style.color = '#000000'; // force black text
+    element.style.width = '800px';
+
+    const actionButtons = element.querySelectorAll('.pdf-exclude');
+    actionButtons.forEach((btn: any) => btn.style.display = 'none');
+
+    try {
+      const imgDataUrl = await toJpeg(element, {
+        quality: 1.0,
+        backgroundColor: '#ffffff',
+        pixelRatio: 2,
+        style: {
+          transform: 'none',
+        }
+      });
+      
+      const img = new Image();
+      img.src = imgDataUrl;
+      await new Promise((resolve) => { img.onload = resolve; });
+
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'px',
+        format: [img.width, img.height]
+      });
+
+      pdf.addImage(imgDataUrl, 'JPEG', 0, 0, img.width, img.height);
+      pdf.save(`newshub-${selectedArticle?.id || 'article'}.pdf`);
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+      alert('পিডিএফ ডাউনলোড করতে সমস্যা হয়েছে।');
+    } finally {
+      element.style.cssText = originalStyle;
+      actionButtons.forEach((btn: any) => btn.style.display = '');
     }
   };
 
@@ -1278,7 +1436,18 @@ export default function App() {
       );
     }
 
+    filtered = filtered.filter(news => !dismissedNewsIds.has(news.id));
+
     return filtered;
+  };
+
+  const handleDismissNews = (e: React.MouseEvent, id: string) => {
+     e.stopPropagation();
+     setDismissedNewsIds(prev => {
+       const next = new Set(prev);
+       next.add(id);
+       return next;
+     });
   };
 
   const toggleBookmark = (e: React.MouseEvent, id: string) => {
@@ -1330,13 +1499,11 @@ export default function App() {
             onClick={() => { handleTabChange(item.id as Tab); }}
             className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold transition-all flex items-center gap-2 whitespace-nowrap group active:scale-95 ${
               activeTab === item.id 
-                ? 'bg-red-600 text-white shadow-xl shadow-red-600/30 font-extrabold scale-105' 
-                : isDarkMode 
-                  ? 'bg-white/5 text-white/70 hover:bg-white/10 hover:text-white border border-white/5' 
-                  : 'bg-white text-gray-700 hover:bg-gray-50 hover:text-red-600 border border-gray-200 shadow-sm'
+                ? 'skeuo-inset text-red-600 dark:text-red-500 font-extrabold scale-100' 
+                : 'skeuo-btn text-gray-700 dark:text-gray-300'
             }`}
           >
-            <item.icon size={17} strokeWidth={activeTab === item.id ? 3 : 2} className={activeTab === item.id ? 'text-white' : 'text-red-600'} />
+            <item.icon size={17} strokeWidth={activeTab === item.id ? 3 : 2} className={activeTab === item.id ? 'text-red-600' : 'text-red-600'} />
             <span className="font-bengali">{item.label}</span>
           </button>
         ))}
@@ -1365,7 +1532,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
-      <div className={`min-h-screen font-bengali transition-colors duration-500 overflow-x-hidden ${isDarkMode ? 'bg-[#0a0a0a] text-white' : 'bg-gray-50 text-gray-900'}`}>
+      <div className={`min-h-screen font-bengali transition-colors duration-500 overflow-x-hidden ${isDarkMode ? 'bg-[#151515] text-white' : 'bg-[#e6e6e6] text-gray-900'}`}>
       <AnalyticsTracker />
       {/* Top Utility Bar */}
       <div className={`px-4 md:px-8 py-2 flex justify-between items-center text-[10px] sm:text-xs font-bengali transition-all border-b ${isDarkMode ? 'bg-[#050505] border-white/5 text-gray-500' : 'bg-gray-100 border-gray-200 text-gray-600 shadow-sm'}`}>
@@ -1391,7 +1558,7 @@ export default function App() {
       </div>
 
       {/* Header */}
-      <header className={`sticky top-0 z-[100] backdrop-blur-xl border-b transition-all duration-500 py-3 ${isDarkMode ? 'bg-[#0a0a0a]/80 border-white/5 shadow-2xl' : 'bg-white/80 border-gray-200 shadow-sm'}`}>
+      <header className={`sticky top-0 z-[100] backdrop-blur-xl border-b transition-all duration-500 py-3 ${isDarkMode ? 'bg-[#151515]/80 border-white/5 shadow-2xl' : 'bg-[#e6e6e6]/80 border-gray-300 shadow-sm'}`}>
         <div className="max-w-7xl mx-auto px-4 md:px-8 flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
@@ -1416,11 +1583,11 @@ export default function App() {
               {isAdmin && (
                 <button 
                   onClick={() => setIsAdminPanelOpen(true)}
-                  className="p-2 md:p-2.5 rounded-xl bg-red-600 text-white hover:bg-red-700 transition-all shadow-lg shadow-red-600/20 relative"
+                  className="p-2 md:p-2.5 rounded-xl skeuo-btn text-red-600 transition-all relative"
                 >
                   <ShieldCheck size={20} />
                   {activeUsersCount > 0 && (
-                    <span className="absolute -top-1 -right-1 bg-white text-red-600 text-[8px] font-black px-1 rounded-full border border-red-600 animate-pulse">
+                    <span className="absolute -top-1 -right-1 bg-red-600 text-white text-[8px] font-black px-1 rounded-full shadow-lg animate-pulse">
                       {activeUsersCount}
                     </span>
                   )}
@@ -1432,7 +1599,7 @@ export default function App() {
                   <img 
                     src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName || 'User'}`} 
                     alt="Profile" 
-                    className="w-9 h-9 rounded-xl border-2 border-white/10 group-hover:border-red-600 transition-all cursor-pointer" 
+                    className="w-9 h-9 rounded-xl skeuo-card p-[2px] transition-all cursor-pointer" 
                   />
                   <div className="absolute top-full right-0 mt-2 w-48 bg-[#1a1a1a] border border-white/10 rounded-2xl shadow-2xl p-2 opacity-0 group-hover:opacity-100 transition-all pointer-events-none group-hover:pointer-events-auto z-[210]">
                     <p className="px-4 py-2 text-[10px] font-bold text-gray-500 border-b border-white/5 truncate">{user.email}</p>
@@ -1446,8 +1613,8 @@ export default function App() {
                 </div>
               ) : (
                 <button 
-                  onClick={handleLogin}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-all ${isDarkMode ? 'bg-white/5 text-white border border-white/10' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
+                  onClick={() => setIsAuthModalOpen(true)}
+                  className={`flex items-center gap-2 px-4 py-2 rounded-xl font-bold text-xs transition-all skeuo-btn`}
                 >
                   <LogIn size={16} />
                   <span className="hidden sm:inline font-bengali">লগইন</span>
@@ -1456,13 +1623,13 @@ export default function App() {
 
               <button 
                 onClick={() => setIsSearchActive(!isSearchActive)}
-                className={`p-2 md:p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-white/5 text-white' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
+                className={`p-2 md:p-2.5 rounded-xl transition-all skeuo-btn`}
               >
                 <Search size={20} />
               </button>
 
               <button 
-                className={`md:hidden p-2.5 rounded-xl transition-all ${isDarkMode ? 'bg-white/5 text-white' : 'bg-gray-100 text-gray-900 border border-gray-200'}`}
+                className={`md:hidden p-2.5 rounded-xl transition-all skeuo-btn`}
                 onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
               >
                 {isMobileMenuOpen ? <X size={20} /> : <Menu size={20} />}
@@ -1538,7 +1705,18 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 w-full ${activeTab === 'home' ? 'max-w-full px-0' : 'max-w-7xl mx-auto px-4 md:px-8'} pb-8 flex flex-col items-stretch`}>
-        
+        {isRefreshing && liveNews.length === 0 && activeTab !== 'ai' ? (
+          <LoadingScreen isDarkMode={isDarkMode} />
+        ) : (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={`${activeTab}-${selectedCategory}`}
+              initial={{ opacity: 0, x: 20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              transition={{ duration: 0.3 }}
+              className="flex flex-col flex-1 w-full"
+            >
         {/* News Feed Sections */}
         {['home', 'national', 'international', 'sports', 'tech', 'entertainment', 'visa', 'saved', 'english', 'bangla'].includes(activeTab) && (
           <div className="flex flex-col gap-0">
@@ -1555,34 +1733,37 @@ export default function App() {
                   )}
 
                   <div className="max-w-7xl mx-auto w-full px-4 md:px-8 -mt-16 md:-mt-24 relative z-20 space-y-12 pb-20">
+                    {/* FIFA 2026 Banner */}
+                    <FifaWorldCupBanner news={liveNews} onNewsClick={setSelectedArticle} />
+
                     {/* Quick Access Grid */}
                     <div className="grid grid-cols-2 gap-4">
                       <motion.div 
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => handleTabChange('bangla')}
-                        className="bg-red-600 rounded-3xl p-5 md:p-8 flex items-center justify-between cursor-pointer shadow-xl shadow-red-600/20 overflow-hidden relative group"
+                        className="skeuo-card p-5 md:p-8 flex items-center justify-between cursor-pointer overflow-hidden relative group"
                       >
                          <div className="relative z-10">
-                            <h4 className="text-white font-black text-lg md:text-2xl font-bengali leading-tight">আজকের<br/>পত্রিকা</h4>
-                            <p className="text-white/70 text-xs mt-1 md:mt-2 font-bold uppercase tracking-widest">All Newspapers</p>
+                            <h4 className="text-gray-900 dark:text-white font-black text-lg md:text-2xl font-bengali leading-tight">আজকের<br/>পত্রিকা</h4>
+                            <p className="text-red-600 text-xs mt-1 md:mt-2 font-bold uppercase tracking-widest">All Newspapers</p>
                          </div>
-                         <Newspaper size={48} className="text-white/20 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
+                         <Newspaper size={48} className="text-gray-300 dark:text-gray-700 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
                       </motion.div>
 
                       <motion.div 
                         whileHover={{ scale: 1.02 }}
                         whileTap={{ scale: 0.98 }}
                         onClick={() => handleTabChange('tv')}
-                        className="bg-[#0f0f0f] border border-white/5 rounded-3xl p-5 md:p-8 flex items-center justify-between cursor-pointer shadow-2xl overflow-hidden relative group"
+                        className="skeuo-card p-5 md:p-8 flex items-center justify-between cursor-pointer overflow-hidden relative group"
                       >
                          <div className="relative z-10">
-                            <h4 className="text-white font-black text-lg md:text-2xl font-bengali leading-tight">লাইভ<br/>টিভি</h4>
+                            <h4 className="text-gray-900 dark:text-white font-black text-lg md:text-2xl font-bengali leading-tight">লাইভ<br/>টিভি</h4>
                             <p className="text-red-600 text-xs mt-1 md:mt-2 font-bold uppercase tracking-widest flex items-center gap-1.5">
                                <span className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></span> Live News TV
                             </p>
                          </div>
-                         <Tv size={48} className="text-white/10 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
+                         <Tv size={48} className="text-gray-300 dark:text-gray-700 absolute -right-2 -bottom-2 group-hover:scale-110 transition-transform md:w-20 md:h-20" />
                       </motion.div>
                     </div>
 
@@ -1637,17 +1818,21 @@ export default function App() {
                       animate="show"
                       className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 md:gap-8"
                     >
-                      {displayNews.map((news) => (
-                        <NewsCard 
-                           key={news.id} 
-                           news={news} 
-                           onNewsClick={setSelectedArticle} 
-                           onShareClick={handleShare}
-                           onDownloadClick={handleDownloadImage}
-                           isSaved={savedArticles.includes(news.id)}
-                           onToggleBookmark={toggleBookmark}
-                        />
-                      ))}
+                      <AnimatePresence>
+                        {displayNews.map((news, index) => (
+                          <NewsCard 
+                             key={news.id} 
+                             news={news} 
+                             index={index}
+                             onNewsClick={setSelectedArticle} 
+                             onShareClick={handleShare}
+                             onDownloadClick={handleDownloadImage}
+                             isSaved={savedArticles.includes(news.id)}
+                             onToggleBookmark={toggleBookmark}
+                             onDismiss={handleDismissNews}
+                          />
+                        ))}
+                      </AnimatePresence>
                     </motion.div>
                   ) : (
                     <div className="flex flex-col items-center justify-center py-32 text-center">
@@ -1776,7 +1961,9 @@ export default function App() {
             </div>
           </div>
         )}
-
+          </motion.div>
+          </AnimatePresence>
+        )}
       </main>
 
       {/* Article Reader Modal */}
@@ -1867,21 +2054,29 @@ export default function App() {
 
                   <button 
                     onClick={() => handleShare(selectedArticle)}
-                    className={`p-2 rounded-xl transition-all border ${readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200'}`}
+                    className={`p-2 rounded-xl transition-all border pdf-exclude ${readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200'}`}
                   >
                     <Share2 className="w-4 h-4" />
                   </button>
 
                   <button 
+                    onClick={handleDownloadPDF}
+                    className={`p-2 rounded-xl transition-all border pdf-exclude ${readerTheme === 'dark' ? 'bg-white/5 border-white/10 text-gray-400 hover:text-white' : 'bg-gray-100 border-gray-300 text-gray-600 hover:bg-gray-200'}`}
+                    title="পিডিএফ ডাউনলোড করুন"
+                  >
+                    <Download className="w-4 h-4" />
+                  </button>
+
+                  <button 
                     onClick={() => closeArticle()}
-                    className="p-2 bg-red-600 rounded-xl text-white hover:bg-red-700 transition-colors focus:ring-2 focus:ring-red-500"
+                    className="p-2 bg-red-600 rounded-xl text-white hover:bg-red-700 transition-colors focus:ring-2 focus:ring-red-500 pdf-exclude"
                   >
                     <X className="w-4 h-4" />
                   </button>
                 </div>
               </div>
               
-              <div className={`p-6 md:p-12 font-bengali relative z-20 transition-colors duration-500 ${getThemeBg()}`}>
+              <div id="article-content-to-pdf" className={`p-6 md:p-12 font-bengali relative z-20 transition-colors duration-500 ${getThemeBg()}`}>
                 <div className="flex items-center gap-3 text-[10px] md:text-xs text-gray-500 mb-6 uppercase tracking-[0.2em] font-bold">
                   <span className="flex items-center gap-2 bg-red-600/10 text-red-500 px-2 py-0.5 rounded-full"><Clock size={12}/> {selectedArticle.time}</span>
                   <span className="opacity-30">•</span>
@@ -1938,7 +2133,7 @@ export default function App() {
                    {selectedArticle.url && selectedArticle.url !== '#' && (
                      <button 
                         onClick={() => window.open(selectedArticle.url, '_blank')}
-                        className="w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-xl flex items-center justify-center gap-2 group"
+                        className="pdf-exclude w-full sm:w-auto px-6 py-3 bg-red-600 text-white font-black rounded-2xl hover:bg-red-700 transition-all shadow-xl flex items-center justify-center gap-2 group"
                      >
                         মূল সংবাদটি পড়ুন <ArrowRight size={18} className="group-hover:translate-x-1 transition-transform" />
                      </button>
@@ -1946,14 +2141,16 @@ export default function App() {
                 </div>
 
                 {/* Article Comments */}
-                <ArticleComments 
-                  articleId={selectedArticle.id} 
-                  articleTitle={selectedArticle.title} 
-                />
+                <div className="pdf-exclude">
+                  <ArticleComments 
+                    articleId={selectedArticle.id} 
+                    articleTitle={selectedArticle.title} 
+                  />
+                </div>
 
                 {/* Related News Section */}
                 {liveNews.filter(n => n.id !== selectedArticle.id && n.category === selectedArticle.category).length > 0 && (
-                  <div className="mt-12 pt-8 border-t border-gray-800">
+                  <div className="mt-12 pt-8 border-t border-gray-800 pdf-exclude">
                     <h3 className={`text-xl font-bold mb-6 flex items-center gap-2 relative ${readerTheme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
                        <span className="w-1.5 h-6 bg-red-600 rounded-full inline-block mr-1"></span>
                        সম্পর্কিত খবর
@@ -2090,6 +2287,54 @@ export default function App() {
         isOpen={isFeedbackModalOpen} 
         onClose={() => setIsFeedbackModalOpen(false)} 
       />
+
+      <LoginModal 
+        isOpen={isAuthModalOpen}
+        onClose={() => setIsAuthModalOpen(false)}
+        isDarkMode={isDarkMode}
+        onGoogleLogin={handleLogin}
+      />
+
+      {/* Background Update Toast */}
+      <AnimatePresence>
+        {pendingNews.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 50, scale: 0.9 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 50, scale: 0.9 }}
+            transition={{ type: "spring", stiffness: 400, damping: 25 }}
+            className={`fixed bottom-24 md:bottom-10 left-1/2 -translate-x-1/2 z-[200] max-w-sm w-full px-4`}
+          >
+            <div className={`p-4 rounded-2xl shadow-2xl flex items-center justify-between gap-4 border ${isDarkMode ? 'bg-[#1e1e1e] border-white/10 text-white' : 'bg-white border-gray-200 text-gray-900'}`}>
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-red-600/20 rounded-full">
+                  <RefreshCw size={18} className="text-red-500" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-sm">{pendingNews.length}টি নতুন খবর</h4>
+                  <p className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>তাজা খবর দেখতে রিফ্রেশ করুন</p>
+                </div>
+              </div>
+              <button 
+                onClick={() => {
+                   setLiveNews(prev => {
+                       const combinedPending = [...pendingNews, ...prev];
+                       const unique = new Map();
+                       combinedPending.forEach(n => unique.set(n.id, n));
+                       const sorted = Array.from(unique.values()).sort((a: any, b: any) => (b.timestamp || 0) - (a.timestamp || 0));
+                       return sorted.slice(0, 100);
+                   });
+                   setPendingNews([]);
+                   window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${isDarkMode ? 'bg-white/10 hover:bg-white/20 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-900'}`}
+              >
+                রিফ্রেশ
+              </button>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Admin Panel Modal removed to use full page view */}
     </div>

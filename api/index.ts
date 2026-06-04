@@ -20,15 +20,13 @@ const parser = new Parser({
 const RSS_FEEDS = [
   { url: 'https://www.prothomalo.com/feed', source: 'Prothom Alo', category: 'national' },
   { url: 'https://www.thedailystar.net/rss.xml', source: 'The Daily Star', category: 'national' },
-  { url: 'https://www.dhakatribune.com/rss.xml', source: 'Dhaka Tribune', category: 'national' },
-  { url: 'https://www.jugantor.com/feed', source: 'Jugantor', category: 'national' },
-  { url: 'https://www.ittefaq.com.bd/feed', source: 'Ittefaq', category: 'national' },
-  { url: 'https://samakal.com/feed', source: 'Samakal', category: 'national' },
-  { url: 'https://www.somoynews.tv/feed', source: 'Somoy TV', category: 'general' },
-  { url: 'https://www.jamuna.tv/feed', source: 'Jamuna TV', category: 'general' },
+  { url: 'https://en.prothomalo.com/feed', source: 'Prothom Alo English', category: 'national' },
+  { url: 'https://www.jagonews24.com/rss/rss.xml', source: 'Jagonews24', category: 'national' },
   { url: 'https://www.channelionline.com/feed', source: 'Channel i', category: 'general' },
-  { url: 'https://www.independent24.com/feed', source: 'Independent TV', category: 'general' },
-  { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', source: 'NYT World', category: 'international' }
+  { url: 'https://rss.nytimes.com/services/xml/rss/nyt/World.xml', source: 'NYT World', category: 'international' },
+  { url: 'http://feeds.bbci.co.uk/news/world/rss.xml', source: 'BBC News', category: 'international' },
+  { url: 'http://rss.cnn.com/rss/edition_world.rss', source: 'CNN World', category: 'international' },
+  { url: 'https://www.aljazeera.com/xml/rss/all.xml', source: 'Al Jazeera', category: 'international' }
 ];
 
 let cachedRssNews: any[] = [];
@@ -45,18 +43,29 @@ async function fetchRssFeeds() {
     try {
       const feed = await parser.parseURL(feedConfig.url);
       feed.items.forEach(item => {
-        let imageUrl = "https://images.unsplash.com/photo-1585829365295-ab7cd400c167?w=800&q=80";
+        let imageUrl = "";
         if (item.enclosure && item.enclosure.url) imageUrl = item.enclosure.url;
         else if (item['media:content'] && item['media:content']['$'] && item['media:content']['$'].url) imageUrl = item['media:content']['$'].url;
         else if (item['media:thumbnail'] && item['media:thumbnail']['$'] && item['media:thumbnail']['$'].url) imageUrl = item['media:thumbnail']['$'].url;
-        else if (item.content) {
-          const imgMatch = item.content.match(/<img[^>]+src="([^">]+)"/);
-          if (imgMatch && imgMatch[1]) imageUrl = imgMatch[1];
+        else {
+          // Use regex to find images in content, contentSnippet, or description
+          const searchTarget = (item.content || '') + ' ' + (item.contentSnippet || '') + ' ' + ((item as any).description || '');
+          const imgMatch = searchTarget.match(/<img[^>]+src=["']([^"']+)["']/i);
+          if (imgMatch && imgMatch[1]) {
+             imageUrl = imgMatch[1];
+             if (imageUrl.startsWith('//')) imageUrl = 'https:' + imageUrl;
+          }
         }
+        
+        // If still no image and it's from google news, we might not have an image format at all, rely on client.
+
+        
+        // Clean summary from HTML
+        const summary = (item.contentSnippet || item.content || '').replace(/<[^>]+>/g, '').substring(0, 150) + "...";
         allNews.push({
           id: Buffer.from(item.guid || item.link || item.title || '').toString('base64'),
           title: item.title,
-          summary: (item.contentSnippet || item.content || '').substring(0, 150) + "...",
+          summary: summary,
           content: item.content || item.contentSnippet,
           category: feedConfig.category,
           source: feedConfig.source || feed.title,

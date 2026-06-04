@@ -20,10 +20,31 @@
 }
 
 @layer components {
+  /* Common UI Elements */
   .news-card {
     @apply bg-white dark:bg-[#121212] rounded-xl p-4 m-2 shadow-[0_2px_10px_rgba(0,0,0,0.1)] transition-transform duration-300;
   }
   .news-card:hover {
     @apply -translate-y-[3px];
   }
+
+  /* Skeuomorphic & Neumorphic Styles */
+  .skeuo-card {
+    @apply bg-[#e6e6e6] dark:bg-[#151515] shadow-[8px_8px_16px_#d9d9d9,-8px_-8px_16px_#ffffff] dark:shadow-[8px_8px_16px_#0d0d0d,-8px_-8px_16px_#1d1d1d] border border-white/50 dark:border-white/5 transition-all duration-300 rounded-2xl;
+  }
+  .skeuo-card:hover {
+    @apply shadow-[10px_10px_20px_#d0d0d0,-10px_-10px_20px_#ffffff] dark:shadow-[10px_10px_20px_#0b0b0b,-10px_-10px_20px_#1f1f1f] -translate-y-1;
+  }
+
+  .skeuo-btn {
+    @apply bg-[#e6e6e6] dark:bg-[#151515] shadow-[4px_4px_8px_#d9d9d9,-4px_-4px_8px_#ffffff] dark:shadow-[4px_4px_8px_#0d0d0d,-4px_-4px_8px_#1d1d1d] border border-white/50 dark:border-white/5 transition-all duration-200;
+  }
+  .skeuo-btn:active, .skeuo-btn-pressed {
+    @apply bg-[#e0e0e0] dark:bg-[#131313] shadow-[inset_4px_4px_8px_#d1d5db,inset_-4px_-4px_8px_#ffffff] dark:shadow-[inset_4px_4px_8px_#0b0b0b,inset_-4px_-4px_8px_#1b1b1b];
+  }
+
+  .skeuo-inset {
+    @apply bg-[#e6e6e6] dark:bg-[#151515] shadow-[inset_6px_6px_12px_#d1d5db,inset_-6px_-6px_12px_#ffffff] dark:shadow-[inset_6px_6px_12px_#0b0b0b,inset_-6px_-6px_12px_#1b1b1b];
+  }
 }
+
